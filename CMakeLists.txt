@@ -23,6 +23,7 @@ target_include_directories(igpu
 target_compile_options(igpu
     PRIVATE
         -g
+        -D IGPU_VULKAN
 )
 
 target_link_libraries(igpu
