@@ -9,6 +9,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
+IF (WIN32)
+    set(CMAKE_PREFIX_PATH "C:/Program Files (x86)/GLFW;${CMAKE_PREFIX_PATH}")
+ENDIF ()
+
+# Make dependent on a build time flag...
+find_package(glfw3 REQUIRED)
 find_package(Vulkan REQUIRED)
 
 add_library(igpu
@@ -24,9 +30,11 @@ target_compile_options(igpu
     PRIVATE
         -g
         -D IGPU_VULKAN
+        -D IGPU_GLFW
 )
 
 target_link_libraries(igpu
     PRIVATE
+        glfw
         Vulkan::Vulkan
 )

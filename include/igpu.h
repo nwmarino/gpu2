@@ -348,6 +348,8 @@ public:
     void barrier(Stage before, Stage after);
 };
 
+using GpuAddr = uint64_t;
+
 struct RenderingDeviceInfo {
     void* window = nullptr;
     Format surface = Format::eRGBA8Unorm;
@@ -370,10 +372,11 @@ public:
     RenderingDevice(RenderingDevice&&) noexcept = delete;
     void operator=(RenderingDevice&&) noexcept = delete;
 
-    void* malloc(uint32_t bytes, MemoryType memory = MemoryType::eDefault);
-    void* malloc(uint32_t bytes, uint32_t align, MemoryType memory = MemoryType::eDefault);
-    void  free(void* gptr);
-    void* hostToDevicePointer(void* ptr);
+    GpuAddr malloc(uint64_t size, MemoryType type = MemoryType::eDefault);
+    void free(GpuAddr addr);
+    
+    void* deviceToHostAddress(GpuAddr addr);
+    GpuAddr hostToDeviceAddress(void* ptr);
 
     Texture createTexture(const TextureInfo& info, void* gptr);    
     void freeTexture(Texture texture);
