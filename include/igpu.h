@@ -6,22 +6,26 @@
 #ifndef IGPU_H_
 #define IGPU_H_
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace gpu {
 
 using GpuAddr = uint64_t;
 
-using Texture = uint64_t;
+using CommandList = uint64_t;
 using Pipeline = uint64_t;
 using Semaphore = uint64_t;
-using CommandList = uint64_t;
+using Texture = uint64_t;
+using TextureView = uint64_t;
 
 struct RenderingDevice_T; 
 
+/// The different types of host/device memory that can be allocated.
 enum class MemoryType : int32_t {
     /// Memory supporting both device and host usage.
     eDefault,
@@ -98,12 +102,6 @@ enum class Fill : int32_t {
     eLine,
 };
 
-enum class DepthFlags : int32_t {
-    eNone = 0,
-    eRead = 1 << 1,
-    eWrite = 1 << 2,
-};
-
 enum class TextureType : int32_t {
     e1D,
     e2D,
@@ -141,7 +139,6 @@ enum class Factor : int32_t {
 };
 
 enum class Usage : int32_t {
-    eUndefined,
     eTransferSrc,
     eTransferDst,
     eSampled,
@@ -209,34 +206,26 @@ struct ClearDepthStencilValue {
 };
 
 struct TimelinePair final {
-    Semaphore sema;
-    uint64_t value;
+    Semaphore sema = 0;
+    uint64_t value = 0;
 };
 
 struct TextureInfo {
     TextureType type = TextureType::e2D;
     Format format = Format::eUndefined;
-    Usage usage = Usage::eUndefined;
+    Usage usage;
     uint16_t layer_count = 1;
     uint8_t mip_count = 1;
     uint8_t sample_count = 1;
+    std::array<uint32_t, 3> dimensions;
 };
 
-struct ViewInfo {
+struct TextureViewInfo {
     Format format = Format::eUndefined;
     uint16_t base_layer = 0;
     uint16_t layer_count = 1;
     uint8_t base_mip = 0;
     uint8_t mip_count = 1;
-};
-
-enum class Sampler : int32_t {
-    ePointClamp,
-    ePointWrap,
-    eLinearClamp,
-    eLinearWrap,
-    eAnisotropicClamp,
-    eAnisotropicWrap,
 };
 
 struct SamplerInfo {
@@ -301,13 +290,8 @@ struct RenderingInfo final {
     std::optional<TargetInfo> stencil = std::nullopt;
 };
 
-struct TextureSizeAlign final {
-    uint32_t size;
-    uint32_t align;
-};
-
 struct TextureDescriptor final {
-    uint64_t data[4];
+    std::array<uint64_t, 4> data;
 };
 
 struct RenderingDeviceInfo {
@@ -339,26 +323,33 @@ public:
     void* deviceToHostAddress(GpuAddr addr);
     GpuAddr hostToDeviceAddress(void* ptr);
 
-    Texture createTexture(const TextureInfo& info, void* gptr);    
+    Texture createTexture(const TextureInfo& info, GpuAddr addr);    
     void freeTexture(Texture texture);
-    TextureSizeAlign textureSizeAlign(const TextureInfo& info);
-    TextureDescriptor getTextureViewDescriptor(Texture texture, const ViewInfo& info);
-    TextureDescriptor getRWTextureViewDescriptor(Texture texture, const ViewInfo& info);
+
+    TextureDescriptor getTextureViewDescriptor(
+        Texture texture, 
+        const TextureViewInfo& info);
+    TextureDescriptor getRWTextureViewDescriptor(
+        Texture texture, 
+        const TextureViewInfo& info);
 
     CommandList beginRecording(QueueType queue);
     void submit(QueueType queue, 
-                TimelinePair signal, 
-                TimelinePair wait, 
-                std::span<CommandList> lists);
+                const std::vector<CommandList>& lists,
+                TimelinePair signal = {}, 
+                TimelinePair wait = {});
 
     Semaphore createSemaphore(uint64_t value);
     void freeSemaphore(Semaphore sema);
     void waitSemaphore(Semaphore sema, uint64_t value);
 
-    Pipeline createComputePipeline(std::string_view compute);
-    Pipeline createGraphicsPipeline(std::string_view vertex, 
-                                    std::string_view fragment, 
-                                    const RasterInfo& info);
+    Pipeline createComputePipeline(
+        std::string_view compute);
+    Pipeline createGraphicsPipeline(
+        std::string_view vertex, 
+        std::string_view fragment, 
+        const RasterInfo& info);
+
     void freePipeline(Pipeline pipeline);
 
     Texture getSwapchainTexture(Semaphore acquire);

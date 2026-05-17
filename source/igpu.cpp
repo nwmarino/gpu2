@@ -48,6 +48,11 @@
 
 namespace gpu {
 
+enum class PipelineType : int32_t {
+    eGraphics,
+    eCompute,
+};
+
 struct AllocationInfo final {
     MemoryType type;
     GpuAddr device;
@@ -55,6 +60,13 @@ struct AllocationInfo final {
 
 #ifdef IGPU_VULKAN
     vk::Buffer buffer;
+    VmaAllocation alloc;
+#endif // IGPU_VULKAN
+};
+
+struct Texture_T final {
+#ifdef IGPU_VULKAN
+    vk::Image image;
     VmaAllocation alloc;
 #endif // IGPU_VULKAN
 };
@@ -75,6 +87,8 @@ struct Semaphore_T final {
 };
 
 struct Pipeline_T final {
+    PipelineType type;
+
 #ifdef IGPU_VULKAN
     vk::Pipeline pipeline;
 #endif // IGPU_VULKAN
@@ -111,6 +125,7 @@ struct RenderingDevice_T final {
     std::unordered_map<void*, GpuAddr> addresses = {};
 
     std::unordered_map<CommandList, CommandList_T> commands = {};
+    std::unordered_map<Texture, Texture_T> textures = {};
     std::unordered_map<QueueType, Queue_T> queues = {};
     std::unordered_map<Semaphore, Semaphore_T> semaphores = {};
     std::unordered_map<Pipeline, Pipeline_T> pipelines = {};
@@ -139,6 +154,41 @@ struct RenderingDevice_T final {
 };
 
 #ifdef IGPU_VULKAN
+
+static vk::ImageAspectFlags VK_FormatToAspectMask(Format format) {
+    switch (format) {
+        case Format::eRGBA8Unorm:
+            return vk::ImageAspectFlagBits::eColor;
+        case Format::eD32Float:
+            return vk::ImageAspectFlagBits::eDepth;
+        default:
+            return vk::ImageAspectFlagBits::eNone;
+    }
+}
+
+static vk::PipelineBindPoint VK_PipelineTypeToBindPoint(PipelineType type) {
+    switch (type) {
+        case PipelineType::eGraphics:
+            return vk::PipelineBindPoint::eGraphics;
+        case PipelineType::eCompute:
+            return vk::PipelineBindPoint::eCompute;
+    }
+}
+
+static vk::ImageType textureTypeToVulkan(TextureType type) {
+    switch (type) {
+        case TextureType::e1D:
+        case TextureType::e1DArray:
+            return vk::ImageType::e1D;
+        case TextureType::e2D:
+        case TextureType::e2DArray:
+        case TextureType::eCube:
+        case TextureType::eCubeArray:
+            return vk::ImageType::e2D;
+        case TextureType::e3D:
+            return vk::ImageType::e3D;
+    }
+}
 
 static vk::Format formatToVulkan(Format format) {
     switch (format) {
@@ -185,6 +235,23 @@ static vk::PolygonMode fillToVulkan(Fill fill) {
             return vk::PolygonMode::eFill;
         case Fill::eLine:
             return vk::PolygonMode::eLine;
+    }
+}
+
+static vk::ImageUsageFlagBits usageToVulkan(Usage usage) {
+    switch (usage) {
+    case Usage::eTransferSrc:
+        return vk::ImageUsageFlagBits::eTransferSrc;
+    case Usage::eTransferDst:
+        return vk::ImageUsageFlagBits::eTransferDst;
+    case Usage::eSampled:
+        return vk::ImageUsageFlagBits::eSampled;
+    case Usage::eStorage:
+        return vk::ImageUsageFlagBits::eStorage;
+    case Usage::eColorAttachment:
+        return vk::ImageUsageFlagBits::eColorAttachment;
+    case Usage::eDepthStencilAttachment:
+        return vk::ImageUsageFlagBits::eDepthStencilAttachment;
     }
 }
 
@@ -449,6 +516,95 @@ GpuAddr RenderingDevice::hostToDeviceAddress(void* ptr) {
     return 0;
 }
 
+Texture RenderingDevice::createTexture(const TextureInfo& info, GpuAddr addr) {
+    Texture_T texture = {};
+
+#ifdef IGPU_VULKAN
+
+    // Enable the cube compatability flag if necessary.
+    vk::ImageCreateFlags flags = {};
+    if (info.type == TextureType::eCube || info.type == TextureType::eCubeArray)
+        flags |= vk::ImageCreateFlagBits::eCubeCompatible;
+
+    auto image_info = vk::ImageCreateInfo {}
+        .setFlags(flags)
+        .setFormat(formatToVulkan(info.format))
+        .setExtent({ info.dimensions[0], info.dimensions[1], info.dimensions[3] })
+        .setImageType(textureTypeToVulkan(info.type))
+        .setMipLevels(info.mip_count)
+        .setArrayLayers(info.layer_count)
+        .setSamples(samplesToVulkan(info.sample_count))
+        .setUsage(usageToVulkan(info.usage))
+        .setSharingMode(vk::SharingMode::eConcurrent)
+        .setInitialLayout(vk::ImageLayout::eUndefined)
+        .setQueueFamilyIndexCount(1 /* @Todo */)
+        .setPQueueFamilyIndices(nullptr /* @Todo */);
+
+    VmaAllocationCreateInfo vma_info = {};
+    vma_info.requiredFlags = VMA_MEMORY_USAGE_GPU_ONLY;
+
+    VmaAllocationInfo alloc_info = {};
+
+    vk::Result result = vk::Result(vmaCreateImage(
+        m_impl->vma,
+        reinterpret_cast<VkImageCreateInfo*>(&image_info),
+        &vma_info,
+        reinterpret_cast<VkImage*>(&texture.image),
+        &texture.alloc,
+        &alloc_info));
+
+    if (result != vk::Result::eSuccess)
+        return 0;
+
+    CommandList cmd = beginRecording(QueueType::eTransfer);
+    if (!cmd)
+        return 0; // @Todo: Destroy image and allocation.
+
+    auto barrier = vk::ImageMemoryBarrier2 {}
+        .setImage(texture.image)
+        .setSrcStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)
+        .setDstStageMask(vk::PipelineStageFlagBits2::eAllGraphics)
+        .setOldLayout(vk::ImageLayout::eUndefined)
+        .setNewLayout(vk::ImageLayout::eGeneral)
+        .setSubresourceRange(vk::ImageSubresourceRange {}
+            .setBaseMipLevel(0)
+            .setBaseArrayLayer(0)
+            .setLevelCount(info.mip_count)
+            .setLayerCount(info.layer_count)
+            .setAspectMask(VK_FormatToAspectMask(info.format)));
+
+    CommandList_T igpu_list = m_impl->getCommandList(cmd);
+
+    igpu_list.cmd.pipelineBarrier2(vk::DependencyInfo {}
+        .setImageMemoryBarrierCount(1)
+        .setPImageMemoryBarriers(&barrier));
+
+    submit(QueueType::eTransfer, { cmd });
+
+#endif // IGPU_VULKAN
+
+    Texture handle = m_impl->textures.size();
+    m_impl->textures.emplace(handle, texture);
+    return handle;
+}
+
+void RenderingDevice::freeTexture(Texture texture) {
+    auto it = m_impl->textures.find(texture);
+    if (it == m_impl->textures.end())
+        return; // Handle is invalid.
+
+    Texture_T igpu_texture = it->second;
+
+#ifdef IGPU_VULKAN
+
+    if (igpu_texture.alloc)
+        vmaDestroyImage(m_impl->vma, igpu_texture.image, igpu_texture.alloc);
+
+#endif // IGPU_VULKAN
+
+    m_impl->textures.erase(it);
+}
+
 CommandList RenderingDevice::beginRecording(QueueType queue) {
     CommandList_T list = {};
 
@@ -493,9 +649,9 @@ CommandList RenderingDevice::beginRecording(QueueType queue) {
 }
 
 void RenderingDevice::submit(QueueType queue, 
+                             const std::vector<CommandList>& lists,
                              TimelinePair signal, 
-                             TimelinePair wait, 
-                             std::span<CommandList> lists) {
+                             TimelinePair wait) {
 #ifdef IGPU_VULKAN
 
     std::vector<vk::CommandBufferSubmitInfo> buffers = {};
@@ -506,21 +662,27 @@ void RenderingDevice::submit(QueueType queue,
             .setCommandBuffer(m_impl->getCommandList(list).cmd));
     }
 
-    auto signal_info = vk::SemaphoreSubmitInfo {}
-        .setSemaphore(m_impl->getSemaphore(signal.sema).sema)
-        .setValue(signal.value);
-
-    auto wait_info = vk::SemaphoreSubmitInfo {}
-        .setSemaphore(m_impl->getSemaphore(wait.sema).sema)
-        .setValue(wait.value);
-
     auto submit_info = vk::SubmitInfo2 {}
         .setCommandBufferInfoCount(static_cast<uint32_t>(buffers.size()))
-        .setPCommandBufferInfos(buffers.data())
-        .setSignalSemaphoreInfoCount(1)
-        .setPSignalSemaphoreInfos(&signal_info)
-        .setWaitSemaphoreInfoCount(1)
-        .setPWaitSemaphoreInfos(&wait_info);
+        .setPCommandBufferInfos(buffers.data());
+
+    if (signal.sema) {
+        auto signal_info = vk::SemaphoreSubmitInfo {}
+            .setSemaphore(m_impl->getSemaphore(signal.sema).sema)
+            .setValue(signal.value);
+
+        submit_info.setSignalSemaphoreInfoCount(1);
+        submit_info.setPSignalSemaphoreInfos(&signal_info);
+    }
+
+    if (wait.sema) {
+        auto wait_info = vk::SemaphoreSubmitInfo {}
+            .setSemaphore(m_impl->getSemaphore(wait.sema).sema)
+            .setValue(wait.value);
+
+        submit_info.setWaitSemaphoreInfoCount(1);
+        submit_info.setPWaitSemaphoreInfos(&wait_info);
+    }
 
     vk::Result result = m_impl->getQueue(queue).queue.submit2(submit_info);
     IGPU_ASSERT(result == vk::Result::eSuccess, 
@@ -583,16 +745,18 @@ void RenderingDevice::waitSemaphore(Semaphore sema, uint64_t value) {
 
     auto wait_info = vk::SemaphoreWaitInfo {}
         .setSemaphoreCount(1)
-        .setPSemaphores(&igpu_sema.sema);
+        .setPSemaphores(&igpu_sema.sema)
+        .setValues(value);
 
     // @Todo: Figure out what to do with result.
-    (void) m_impl->device.waitSemaphores(&wait_info, value);
+    (void) m_impl->device.waitSemaphores(&wait_info, UINT64_C(1'000'000'000));
 
 #endif // IGPU_VULKAN
 }
 
 Pipeline RenderingDevice::createComputePipeline(std::string_view compute) {
     Pipeline_T pipeline = {};
+    pipeline.type = PipelineType::eCompute;
 
 #ifdef IGPU_VULKAN
 
@@ -622,6 +786,7 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
                                                  std::string_view fragment, 
                                                  const RasterInfo& info) {
     Pipeline_T pipeline = {};
+    pipeline.type = PipelineType::eGraphics;
 
 #ifdef IGPU_VULKAN
 
@@ -741,18 +906,29 @@ void RenderingDevice::freePipeline(Pipeline pipeline) {
     if (it == m_impl->pipelines.end())
         return; // Handle is invalid.
 
-    Pipeline_T& igpu_pipeline = it->second;
+    Pipeline_T igpu_pipeline = it->second;
 
 #ifdef IGPU_VULKAN
 
-    if (igpu_pipeline.pipeline) {
+    if (igpu_pipeline.pipeline)
         m_impl->device.destroyPipeline(igpu_pipeline.pipeline);
-        igpu_pipeline.pipeline = nullptr;
-    }
 
 #endif // IGPU_VULKAN
 
     m_impl->pipelines.erase(it);
+}
+
+void RenderingDevice::setPipeline(CommandList cmd, Pipeline pipeline) {
+    CommandList_T igpu_list = m_impl->getCommandList(cmd);
+    Pipeline_T igpu_pipeline = m_impl->getPipeline(pipeline);
+
+#ifdef IGPU_VULKAN
+
+    igpu_list.cmd.bindPipeline(
+        VK_PipelineTypeToBindPoint(igpu_pipeline.type), 
+        igpu_pipeline.pipeline);
+
+#endif // IGPU_VULKAN
 }
 
 } // namespace gpu
