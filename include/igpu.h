@@ -13,22 +13,15 @@
 
 namespace gpu {
 
-struct RenderingDevice_T;
+using GpuAddr = uint64_t;
+
+using Texture = uint64_t;
+using Pipeline = uint64_t;
+using Queue = uint64_t;
+using Semaphore = uint64_t;
+
 struct CommandBuffer_T;
-
-struct Texture_T;
-struct BlendState_T;
-struct DepthStencilState_T;
-struct Pipeline_T;
-struct Queue_T;
-struct Semaphore_T;
-
-using Texture = Texture_T*;
-using BlendState = BlendState_T*;
-using DepthStencilState = DepthStencilState_T*;
-using Pipeline = Pipeline_T*;
-using Queue = Queue_T*;
-using Semaphore = Semaphore_T*;
+struct RenderingDevice_T; 
 
 enum class MemoryType : int32_t {
     /// Memory supporting both device and host usage.
@@ -259,41 +252,34 @@ struct SamplerInfo {
     BorderColor border;
 };
 
-struct RasterInfo {
-    Topology topology = Topology::eTriangleList;
-    Cull cull = Cull::eNone;
-    Fill fill = Fill::eFill;
-    bool alpha_to_coverage = false;
-    bool support_dual_source_blending = false;
-    uint8_t sample_count = 1;
-    std::span<Format> targets = {};
-    Format depth_format = Format::eUndefined;
-    Format stencil_format = Format::eUndefined;
-};
-
-struct BlendStateInfo {
+struct AttachmentInfo {
+    Format format = Format::eUndefined;
     BlendOp color_op = BlendOp::eAdd;
     Factor src_color_factor = Factor::eOne;
     Factor dst_color_factor = Factor::eZero;
     BlendOp alpha_op = BlendOp::eAdd;
     Factor src_alpha_factor = Factor::eOne;
     Factor dst_alpha_factor = Factor::eZero;
-    uint8_t color_write_mask = 0xFF;
+    uint32_t color_write_mask = 0xFF;
 };
 
-struct DepthStencilStateInfo {
-    DepthFlags flags = DepthFlags::eNone;
-    CompareOp test = CompareOp::eAlways;
-    float depth_bias = 0.0f;
-    float depth_bias_clamp = 0.0f;
-    float depth_bias_slope_factor = 0.0f;
-    uint8_t stencil_read_mask = 0xFF;
-    uint8_t stencil_write_mask = 0xFF;
-    StencilOp stencil_front;
-    StencilOp stencil_back;
+struct DepthStencilInfo final {
+    Format depth = Format::eUndefined;
+    Format stencil = Format::eUndefined;
 };
 
-struct AttachmentInfo {
+struct RasterInfo {
+    Topology topology = Topology::eTriangleList;
+    Cull cull = Cull::eNone;
+    Fill fill = Fill::eFill;
+    bool alpha_to_coverage = false;
+    uint8_t sample_count = 1;
+    std::span<AttachmentInfo> atts = {};
+    Format depth = Format::eUndefined;
+    Format stencil = Format::eUndefined;
+};
+
+struct TargetInfo final {
     LoadOp load;
     StoreOp store;
 
@@ -303,20 +289,20 @@ struct AttachmentInfo {
     };
 };
 
-struct RenderingInfo {
-    Rect2D area;
+struct RenderingInfo final {
+    Rect2D area = {};
     uint16_t layer_count = 1;
-    std::span<AttachmentInfo> color_atts = {};
-    std::optional<AttachmentInfo> depth_att = {};
-    std::optional<AttachmentInfo> stencil_att = {};
+    std::span<TargetInfo> targets = {};
+    std::optional<TargetInfo> depth = std::nullopt;
+    std::optional<TargetInfo> stencil = std::nullopt;
 };
 
-struct TextureSizeAlign {
+struct TextureSizeAlign final {
     uint32_t size;
     uint32_t align;
 };
 
-struct TextureDescriptor {
+struct TextureDescriptor final {
     uint64_t data[4];
 };
 
@@ -333,9 +319,11 @@ public:
 
     void setViewport(Viewport viewport);
     void setScissor(Rect2D rect);
-
-    void setBlendState(BlendState state);
-    void setDepthStencilState(DepthStencilState state);
+    void setDepthBias(float clamp, float slope, float constant);
+    void setDepthCompareOp(CompareOp op);
+    void setEnableDepthTest(bool value);
+    void setEnableDepthWrite(bool value);
+    void setStencilReference(float value);
 
     void setActiveTextureHeapPtr(void* gptr);
 
@@ -347,8 +335,6 @@ public:
 
     void barrier(Stage before, Stage after);
 };
-
-using GpuAddr = uint64_t;
 
 struct RenderingDeviceInfo {
     void* window = nullptr;
@@ -362,6 +348,7 @@ class RenderingDevice {
     explicit RenderingDevice(RenderingDevice_T* impl) : m_impl(impl) {}
 
 public:
+    [[nodiscard]]
     static RenderingDevice* Create(const RenderingDeviceInfo& info);
 
     ~RenderingDevice();
@@ -396,16 +383,7 @@ public:
     Pipeline createGraphicsPipeline(std::string_view vertex, 
                                     std::string_view fragment, 
                                     const RasterInfo& info);
-    Pipeline createMeshletPipeline(std::string_view meshlet, 
-                                   std::string_view fragment, 
-                                   const RasterInfo& info);
     void freePipeline(Pipeline pipeline);
-
-    BlendState createBlendState(const BlendStateInfo& info);
-    void freeBlendState(BlendState state);
-
-    DepthStencilState createDepthStencilState(const DepthStencilStateInfo& info);
-    void freeDepthStencilState(DepthStencilState state);
 
     Texture getSwapchainTexture(Semaphore acquire);
     void present(Queue queue, Semaphore wait);

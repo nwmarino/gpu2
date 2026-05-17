@@ -4,6 +4,8 @@
 //
 
 #include "../include/igpu.h"
+#include "include/igpu.h"
+#include <array>
 
 #ifdef IGPU_VULKAN
     #define VULKAN_HPP_NO_EXCEPTIONS
@@ -30,14 +32,27 @@
 
 namespace gpu {
 
-struct AllocationInfo {
+struct AllocationInfo final {
     MemoryType type;
-    GpuAddr addr;
+    GpuAddr device;
     void* host;
 
 #ifdef IGPU_VULKAN
     VkBuffer buffer;
     VmaAllocation alloc;
+#endif // IGPU_VULKAN
+};
+
+struct Queue_T final {
+#ifdef IGPU_VULKAN
+    vk::Queue queue;
+    uint32_t family;
+#endif // IGPU_VULKAN
+};
+
+struct Pipeline_T final {
+#ifdef IGPU_VULKAN
+    vk::Pipeline pipeline;
 #endif // IGPU_VULKAN
 };
 
@@ -56,6 +71,8 @@ struct RenderingDevice_T final {
     vk::SurfaceKHR surface = nullptr;
     vk::SwapchainKHR swapchain = nullptr;
 
+    vk::PipelineLayout layout = nullptr;
+
     VmaAllocator vma = nullptr;
 #endif // IGPU_VULKAN
 
@@ -63,7 +80,168 @@ struct RenderingDevice_T final {
     std::mutex memory_mutex;
     std::unordered_map<GpuAddr, AllocationInfo> allocations = {};
     std::unordered_map<void*, GpuAddr> addresses = {};
+
+    std::unordered_map<Pipeline, Pipeline_T> pipelines = {};
 };
+
+#ifdef IGPU_VULKAN
+
+static vk::Format formatToVulkan(Format format) {
+    switch (format) {
+        case Format::eUndefined: 
+            return vk::Format::eUndefined;
+        case Format::eRGBA8Unorm: 
+            return vk::Format::eR8G8B8A8Unorm;
+        case Format::eD32Float: 
+            return vk::Format::eD32Sfloat;
+    }
+}
+
+static vk::PrimitiveTopology topologyToVulkan(Topology topology) {
+    switch (topology) {
+        case Topology::eLineList: 
+            return vk::PrimitiveTopology::eLineList;
+        case Topology::eLineStrip: 
+            return vk::PrimitiveTopology::eLineStrip;
+        case Topology::eTriangleList: 
+            return vk::PrimitiveTopology::eTriangleList;
+        case Topology::eTriangleStrip: 
+            return vk::PrimitiveTopology::eTriangleStrip;
+        case Topology::eTriangleFan: 
+            return vk::PrimitiveTopology::eTriangleFan;
+    }
+}
+
+static vk::CullModeFlags cullToVulkan(Cull cull) {
+    switch (cull) {
+        case Cull::eNone:
+            return vk::CullModeFlagBits::eNone;
+        case Cull::eClockwise:
+            return vk::CullModeFlagBits::eFront;
+        case Cull::eCounterClockwise:
+            return vk::CullModeFlagBits::eBack;
+        case Cull::eAll:
+            return vk::CullModeFlagBits::eFrontAndBack;
+    }
+}
+
+static vk::PolygonMode fillToVulkan(Fill fill) {
+    switch (fill) {
+        case Fill::eFill:
+            return vk::PolygonMode::eFill;
+        case Fill::eLine:
+            return vk::PolygonMode::eLine;
+    }
+}
+
+static vk::SampleCountFlagBits samplesToVulkan(uint8_t sample_count) {
+    switch (sample_count) {
+        case 1:
+            return vk::SampleCountFlagBits::e1;
+        case 2:
+            return vk::SampleCountFlagBits::e2;
+        case 4:
+            return vk::SampleCountFlagBits::e4;
+        case 8:
+            return vk::SampleCountFlagBits::e8;
+        case 16:
+            return vk::SampleCountFlagBits::e16;
+    }
+
+    return vk::SampleCountFlagBits::e1;
+}
+
+static vk::BlendOp blendOpToVulkan(BlendOp op) {
+    switch (op) {
+        case BlendOp::eAdd:
+            return vk::BlendOp::eAdd;
+        case BlendOp::eSubtract:
+            return vk::BlendOp::eSubtract;
+        case BlendOp::eReverseSubtract:
+            return vk::BlendOp::eReverseSubtract;
+        case BlendOp::eMin:
+            return vk::BlendOp::eMin;
+        case BlendOp::eMax:
+            return vk::BlendOp::eMax;
+    }
+}
+
+static vk::BlendFactor blendFactorToVulkan(Factor factor) {
+    switch (factor) {
+        case Factor::eZero:
+            return vk::BlendFactor::eZero;
+        case Factor::eOne:
+            return vk::BlendFactor::eOne;
+        case Factor::eSrcColor:
+            return vk::BlendFactor::eSrcColor;
+        case Factor::eOneMinusSrcColor:
+            return vk::BlendFactor::eOneMinusSrcColor;
+        case Factor::eDstColor:
+            return vk::BlendFactor::eDstColor;
+        case Factor::eOneMinusDstColor:
+            return vk::BlendFactor::eOneMinusDstColor;
+        case Factor::eSrcAlpha:
+            return vk::BlendFactor::eSrcAlpha;
+        case Factor::eOneMinusSrcAlpha:
+            return vk::BlendFactor::eOneMinusSrcAlpha;
+        case Factor::eDstAlpha:
+            return vk::BlendFactor::eDstAlpha;
+        case Factor::eOneMinusDstAlpha:
+            return vk::BlendFactor::eOneMinusDstAlpha;
+        case Factor::eConstantColor:
+            return vk::BlendFactor::eConstantColor;
+        case Factor::eOneMinusConstantColor:
+            return vk::BlendFactor::eOneMinusConstantColor;
+        case Factor::eConstantAlpha:
+            return vk::BlendFactor::eConstantAlpha;
+        case Factor::eOneMinusConstantAlpha:
+            return vk::BlendFactor::eOneMinusConstantAlpha;
+        case Factor::eSrcAlphaSaturate:
+            return vk::BlendFactor::eSrcAlphaSaturate;
+    }
+}
+
+static vk::StencilOp stencilOpToVulkan(StencilOp op) {
+    switch (op) {
+        case StencilOp::eKeep:
+            return vk::StencilOp::eKeep;
+        case StencilOp::eZero:
+            return vk::StencilOp::eZero;
+        case StencilOp::eReplace:
+            return vk::StencilOp::eReplace;
+        case StencilOp::eIncrementAndClamp:
+            return vk::StencilOp::eIncrementAndClamp;
+        case StencilOp::eDecrementAndClamp:
+            return vk::StencilOp::eDecrementAndClamp;
+        case StencilOp::eInvert:
+            return vk::StencilOp::eInvert;
+        case StencilOp::eIncrementAndWrap:
+            return vk::StencilOp::eIncrementAndWrap;
+        case StencilOp::eDecrementAndWrap:
+            return vk::StencilOp::eDecrementAndWrap;
+    }
+}
+
+static vk::PipelineShaderStageCreateInfo createShaderStage(
+        RenderingDevice_T& rd, 
+        std::string_view spirv, 
+        vk::ShaderStageFlagBits stage) {
+    auto stage_info = vk::PipelineShaderStageCreateInfo {}
+        .setStage(stage)
+        .setPName("main");
+
+    auto module_info = vk::ShaderModuleCreateInfo {}
+        .setCodeSize(static_cast<uint32_t>(spirv.length()))
+        .setPCode(reinterpret_cast<const uint32_t*>(spirv.data()));
+
+    // @Todo: Result value should be considered.
+    (void) rd.device.createShaderModule(&module_info, 
+                                        nullptr, 
+                                        &stage_info.module);
+    return stage_info;
+}
+
+#endif // IGPU_VULKAN
 
 //>==--------------------------------------------------------------------------
 //                          RenderingDevice Implementation
@@ -82,36 +260,42 @@ GpuAddr RenderingDevice::malloc(uint64_t size, MemoryType type) {
 
     GpuAddr addr = 0;
 
+    AllocationInfo alloc = {};
+    alloc.type = type;
+
 #ifdef IGPU_VULKAN
+    static constexpr vk::BufferUsageFlags usage = 
+        vk::BufferUsageFlagBits::eStorageBuffer 
+      | vk::BufferUsageFlagBits::eIndirectBuffer
+      | vk::BufferUsageFlagBits::eShaderDeviceAddress 
+      | vk::BufferUsageFlagBits::eTransferSrc 
+      | vk::BufferUsageFlagBits::eTransferDst;
+
     vk::MemoryPropertyFlags mem_flags = {};
     VmaMemoryUsage mem_usage = {};
 
     switch (type) {
     case MemoryType::eDefault:
+        mem_usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
         mem_flags = vk::MemoryPropertyFlagBits::eHostVisible 
                   | vk::MemoryPropertyFlagBits::eHostCoherent;
-        mem_usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
         break;
     case MemoryType::eDevice:
-        mem_flags = vk::MemoryPropertyFlagBits::eDeviceLocal;
         mem_usage = VMA_MEMORY_USAGE_GPU_ONLY;
+        mem_flags = vk::MemoryPropertyFlagBits::eDeviceLocal;
         break;
     case MemoryType::eReadback:
+        mem_usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
         mem_flags = vk::MemoryPropertyFlagBits::eHostVisible 
                   | vk::MemoryPropertyFlagBits::eHostCoherent 
                   | vk::MemoryPropertyFlagBits::eHostCached;
-        mem_usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
         break;
     }
  
-    vk::BufferCreateInfo buffer_info = {};
-    buffer_info.usage = vk::BufferUsageFlagBits::eStorageBuffer 
-                      | vk::BufferUsageFlagBits::eIndirectBuffer
-                      | vk::BufferUsageFlagBits::eShaderDeviceAddress 
-                      | vk::BufferUsageFlagBits::eTransferSrc 
-                      | vk::BufferUsageFlagBits::eTransferDst;
-    buffer_info.size = static_cast<vk::DeviceSize>(size);
-    buffer_info.sharingMode = vk::SharingMode::eConcurrent;
+    auto buffer_info = vk::BufferCreateInfo {}
+        .setUsage(usage)
+        .setSize(static_cast<vk::DeviceSize>(size))
+        .setSharingMode(vk::SharingMode::eConcurrent);
     /*
     buffer_info.queueFamilyIndexCount = ...;
     buffer_info.pQueueFamilyIndices = ...;
@@ -129,46 +313,42 @@ GpuAddr RenderingDevice::malloc(uint64_t size, MemoryType type) {
     vma_info.requiredFlags = static_cast<VkBufferCreateFlags>(mem_flags);
     vma_info.usage = mem_usage;
 
-    vk::Buffer buffer = nullptr;
-    VmaAllocation alloc = nullptr;
     VmaAllocationInfo alloc_info = {};
 
     vk::Result result = vk::Result(vmaCreateBuffer(
         m_impl->vma, 
         reinterpret_cast<VkBufferCreateInfo*>(&buffer_info), 
         &vma_info, 
-        reinterpret_cast<VkBuffer*>(&buffer), 
-        &alloc, 
+        reinterpret_cast<VkBuffer*>(&alloc.buffer), 
+        &alloc.alloc, 
         &alloc_info));
 
     if (result != vk::Result::eSuccess)
         return 0;
     
     vk::BufferDeviceAddressInfo addr_info = {};
-    addr_info.buffer = buffer;
+    addr_info.buffer = alloc.buffer;
 
     // Get the device address for the new memory buffer.
     addr = static_cast<GpuAddr>(m_impl->device.getBufferAddress(&addr_info));
     if (!addr) {
-        vmaDestroyBuffer(m_impl->vma, buffer, alloc);
+        vmaDestroyBuffer(m_impl->vma, alloc.buffer, alloc.alloc);
         return 0;
     }
 
-    AllocationInfo AI = {};
-    AI.type = type;
-    AI.addr = static_cast<GpuAddr>(addr);
-    AI.alloc = alloc;
-    AI.buffer = buffer;
+    alloc.device = static_cast<GpuAddr>(addr);
 
     // If the memory is not device only, then register the host address.
     if (type != MemoryType::eDevice) {
-        AI.host = alloc_info.pMappedData;
-        m_impl->addresses.emplace(AI.host, addr);
+        alloc.host = alloc_info.pMappedData;
+        m_impl->addresses.emplace(alloc.host, addr);
+    } else {
+        alloc.host = nullptr;
     }
 
-    m_impl->allocations.emplace(addr, AI);
 #endif // IGPU_VULKAN
 
+    m_impl->allocations.emplace(addr, alloc);
     return addr;
 }
 
@@ -181,12 +361,15 @@ void RenderingDevice::free(GpuAddr addr) {
         return;
 
     AllocationInfo info = it->second; // Important copy.
-    info.addr = 0;
+    info.device = 0;
+    info.host = nullptr;
 
 #ifdef IGPU_VULKAN
-    vmaDestroyBuffer(m_impl->vma, info.buffer, info.alloc);
-    info.alloc = nullptr;
-    info.buffer = nullptr;
+    if (info.alloc) {
+        vmaDestroyBuffer(m_impl->vma, info.buffer, info.alloc);
+        info.alloc = nullptr;
+        info.buffer = nullptr;
+    }
 #endif // IGPU_VULKAN
 
     m_impl->allocations.erase(it);
@@ -212,6 +395,168 @@ GpuAddr RenderingDevice::hostToDeviceAddress(void* ptr) {
         return it->second;
     
     return 0;
+}
+
+Pipeline RenderingDevice::createComputePipeline(std::string_view compute) {
+    Pipeline_T pipeline = {};
+
+#ifdef IGPU_VULKAN
+    auto pipeline_info = vk::ComputePipelineCreateInfo {}
+        .setFlags(vk::PipelineCreateFlagBits::eDescriptorBufferEXT)
+        .setLayout(m_impl->layout)
+        .setStage(createShaderStage(*m_impl, compute, vk::ShaderStageFlagBits::eCompute));
+
+    vk::Result result = m_impl->device.createComputePipelines(
+        nullptr,
+        1, 
+        &pipeline_info, 
+        nullptr, 
+        &pipeline.pipeline);
+
+    // Shader module is useless now.
+    if (pipeline_info.stage.module)
+        m_impl->device.destroyShaderModule(pipeline_info.stage.module);
+
+    if (result != vk::Result::eSuccess)
+        return 0;
+#endif // IGPU_VULKAN
+
+    Pipeline handle = m_impl->pipelines.size();
+    m_impl->pipelines.try_emplace(handle, pipeline);
+    return handle;
+}
+
+Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex, 
+                                                 std::string_view fragment, 
+                                                 const RasterInfo& info) {
+    Pipeline_T pipeline = {};
+
+#ifdef IGPU_VULKAN
+    // Collect color attachment formats as Vulkan formats.
+    std::vector<vk::Format> formats = {};
+    for (const AttachmentInfo& att : info.atts)
+        formats.push_back(formatToVulkan(att.format));
+
+    std::vector<vk::PipelineShaderStageCreateInfo> stages = {
+        createShaderStage(*m_impl, vertex, vk::ShaderStageFlagBits::eVertex),
+        createShaderStage(*m_impl, fragment, vk::ShaderStageFlagBits::eFragment),
+    };
+
+    std::array<vk::DynamicState, 7> dynamic_states = {
+        vk::DynamicState::eViewport,
+        vk::DynamicState::eScissor,
+        vk::DynamicState::eDepthBias,
+        vk::DynamicState::eDepthTestEnable,
+        vk::DynamicState::eDepthWriteEnable,
+        vk::DynamicState::eDepthCompareOp,
+        vk::DynamicState::eStencilReference,
+    };
+
+    auto input_info = vk::PipelineVertexInputStateCreateInfo {};
+
+    auto assembly_info = vk::PipelineInputAssemblyStateCreateInfo {}
+        .setTopology(topologyToVulkan(info.topology));
+
+    auto multisampling_info = vk::PipelineMultisampleStateCreateInfo {}
+        .setRasterizationSamples(samplesToVulkan(info.sample_count))
+        .setAlphaToCoverageEnable(info.alpha_to_coverage);
+
+    auto dynamic_info = vk::PipelineDynamicStateCreateInfo {}
+        .setDynamicStateCount(static_cast<uint32_t>(dynamic_states.size()))
+        .setPDynamicStates(dynamic_states.data());
+
+    // Viewport and scissor are left as dynamic state.
+    auto viewport_info = vk::PipelineViewportStateCreateInfo {}
+        .setViewportCount(1)
+        .setScissorCount(1);
+
+    auto raster_info = vk::PipelineRasterizationStateCreateInfo {}
+        .setPolygonMode(fillToVulkan(info.fill))
+        .setCullMode(cullToVulkan(info.cull))
+        .setFrontFace(vk::FrontFace::eCounterClockwise)
+        .setLineWidth(1.f)
+        .setDepthBiasEnable(vk::True);
+
+    auto render_info = vk::PipelineRenderingCreateInfo {}
+        .setColorAttachmentCount(static_cast<uint32_t>(formats.size()))
+        .setPColorAttachmentFormats(formats.data())
+        .setDepthAttachmentFormat(formatToVulkan(info.depth))
+        .setStencilAttachmentFormat(formatToVulkan(info.stencil));
+
+    std::vector<vk::PipelineColorBlendAttachmentState> blend_states = {};
+    blend_states.reserve(info.atts.size());
+
+    for (const AttachmentInfo& att : info.atts) {
+        blend_states.push_back(vk::PipelineColorBlendAttachmentState {}
+            .setColorBlendOp(blendOpToVulkan(att.color_op))
+            .setSrcColorBlendFactor(blendFactorToVulkan(att.src_color_factor))
+            .setDstColorBlendFactor(blendFactorToVulkan(att.dst_color_factor))
+            .setAlphaBlendOp(blendOpToVulkan(att.alpha_op))
+            .setSrcAlphaBlendFactor(blendFactorToVulkan(att.src_alpha_factor))
+            .setDstAlphaBlendFactor(blendFactorToVulkan(att.dst_alpha_factor))
+            .setColorWriteMask(static_cast<vk::ColorComponentFlags>(att.color_write_mask)));
+    }
+
+    auto blend_info = vk::PipelineColorBlendStateCreateInfo {}
+        .setAttachments(blend_states);
+
+    auto depth_stencil_info = vk::PipelineDepthStencilStateCreateInfo {};
+
+    auto pipeline_info = vk::GraphicsPipelineCreateInfo {}
+        .setFlags(vk::PipelineCreateFlagBits::eDescriptorBufferEXT)
+        .setStageCount(static_cast<uint32_t>(stages.size()))
+        .setPStages(stages.data())
+        .setLayout(m_impl->layout)
+        .setPVertexInputState(&input_info)
+        .setPInputAssemblyState(&assembly_info)
+        .setPViewportState(&viewport_info)
+        .setPRasterizationState(&raster_info)
+        .setPMultisampleState(&multisampling_info)
+        .setPDepthStencilState(&depth_stencil_info)
+        .setPColorBlendState(&blend_info)
+        .setPDynamicState(&dynamic_info)
+        .setPNext(&render_info);
+
+    vk::Result result = m_impl->device.createGraphicsPipelines(
+        nullptr, 
+        1, 
+        &pipeline_info, 
+        nullptr, 
+        &pipeline.pipeline);
+
+    // Shader modules can be discarded now.
+    for (vk::PipelineShaderStageCreateInfo& stage_info : stages) {
+        if (stage_info.module) {
+            m_impl->device.destroyShaderModule(stage_info.module);
+            stage_info.module = nullptr;
+        }
+    }
+
+    if (result != vk::Result::eSuccess)
+        return 0;
+#endif // IGPU_VULKAN
+
+    Pipeline handle = m_impl->pipelines.size();
+    m_impl->pipelines.emplace(handle, pipeline);
+    return handle;
+}
+
+void RenderingDevice::freePipeline(Pipeline pipeline) {
+    // Find the underlying pipeline resource.
+    auto it = m_impl->pipelines.find(pipeline);
+    if (it == m_impl->pipelines.end())
+        return; // Handle is invalid.
+
+    Pipeline_T& ppl = it->second;
+
+#ifdef IGPU_VULKAN
+    if (ppl.pipeline) {
+        m_impl->device.destroyPipeline(ppl.pipeline);
+        ppl.pipeline = nullptr;
+    }
+#endif // IGPU_VULKAN
+
+    m_impl->pipelines.erase(it);
 }
 
 } // namespace gpu
