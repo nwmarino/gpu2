@@ -3,9 +3,25 @@
 //  All rights reserved.
 //
 
-#include "../include/igpu.h"
 #include "include/igpu.h"
+
 #include <array>
+#include <iostream>
+
+#ifndef NDEBUG
+    #define IGPU_ASSERT(cond, msg) \
+        do { \
+            if (!(cond)) { \
+                std::cerr << "Assertion failed: (" #cond "), " \
+                          << "message: " << msg << ", " \
+                          << "file: " << __FILE__ << ", " \
+                          << "line: " << __LINE__ << std::endl; \
+                std::abort(); \
+            } \
+        } while(false)
+#else
+    #define IGPU_ASSERT(cond, msg) ((void) 0)
+#endif // NDEBUG
 
 #ifdef IGPU_VULKAN
     #define VULKAN_HPP_NO_EXCEPTIONS
@@ -50,6 +66,12 @@ struct Queue_T final {
 #endif // IGPU_VULKAN
 };
 
+struct Semaphore_T final {
+#ifdef IGPU_VULKAN
+    vk::Semaphore sema;
+#endif // IGPU_VULKAN
+};
+
 struct Pipeline_T final {
 #ifdef IGPU_VULKAN
     vk::Pipeline pipeline;
@@ -81,6 +103,7 @@ struct RenderingDevice_T final {
     std::unordered_map<GpuAddr, AllocationInfo> allocations = {};
     std::unordered_map<void*, GpuAddr> addresses = {};
 
+    std::unordered_map<Semaphore, Semaphore_T> semaphores = {};
     std::unordered_map<Pipeline, Pipeline_T> pipelines = {};
 };
 
@@ -397,6 +420,59 @@ GpuAddr RenderingDevice::hostToDeviceAddress(void* ptr) {
     return 0;
 }
 
+Semaphore RenderingDevice::createSemaphore() {
+    Semaphore_T sema = {};
+
+#ifdef IGPU_VULKAN
+    auto sema_info = vk::SemaphoreCreateInfo {};
+
+    vk::Result result = m_impl->device.createSemaphore(&sema_info, 
+                                                       nullptr, 
+                                                       &sema.sema);
+    if (result != vk::Result::eSuccess)
+        return 0;
+
+#endif // IGPU_VULKAN
+
+    Semaphore handle = m_impl->semaphores.size();
+    m_impl->semaphores.emplace(handle, sema);
+    return handle;
+}
+
+void RenderingDevice::freeSemaphore(Semaphore sema) {
+    // Find the underlying semaphore resource.
+    auto it = m_impl->semaphores.find(sema);
+    if (it == m_impl->semaphores.end())
+        return; // Handle is invalid.
+
+    Semaphore_T& igpu_sema = it->second;
+
+#ifdef IGPU_VULKAN
+    if (igpu_sema.sema) {
+        m_impl->device.destroySemaphore(igpu_sema.sema);
+        igpu_sema.sema = nullptr;
+    }
+#endif // IGPU_VULKAN
+
+    m_impl->semaphores.erase(it);
+}
+
+void RenderingDevice::waitSemaphore(Semaphore sema, uint64_t value) {
+    auto it = m_impl->semaphores.find(sema);
+    IGPU_ASSERT(it != m_impl->semaphores.end(), "Handle is invalid!");
+
+    Semaphore_T& igpu_sema = it->second;
+
+#ifdef IGPU_VULKAN
+    auto wait_info = vk::SemaphoreWaitInfo {}
+        .setSemaphoreCount(1)
+        .setPSemaphores(&igpu_sema.sema);
+
+    vk::Result result = m_impl->device.waitSemaphores(&wait_info, value);
+    IGPU_ASSERT(result == vk::Result::eSuccess, "Failed to wait on semaphore!");
+#endif // IGPU_VULKAN
+}
+
 Pipeline RenderingDevice::createComputePipeline(std::string_view compute) {
     Pipeline_T pipeline = {};
 
@@ -547,12 +623,12 @@ void RenderingDevice::freePipeline(Pipeline pipeline) {
     if (it == m_impl->pipelines.end())
         return; // Handle is invalid.
 
-    Pipeline_T& ppl = it->second;
+    Pipeline_T& igpu_pipeline = it->second;
 
 #ifdef IGPU_VULKAN
-    if (ppl.pipeline) {
-        m_impl->device.destroyPipeline(ppl.pipeline);
-        ppl.pipeline = nullptr;
+    if (igpu_pipeline.pipeline) {
+        m_impl->device.destroyPipeline(igpu_pipeline.pipeline);
+        igpu_pipeline.pipeline = nullptr;
     }
 #endif // IGPU_VULKAN
 
