@@ -29,8 +29,8 @@
 
     #define VMA_IMPLEMENTATION
     #if defined(__clang__)
-        // The VMA header tends to contain a lot of warnings for clang that just 
-        // clutter the building process.
+        // The VMA header tends to contain a lot of warnings for clang that 
+        // just clutter the building process.
         #pragma clang diagnostic push
         #pragma clang diagnostic ignored "-Weverything"
         #include "vma.h"
@@ -54,12 +54,14 @@ struct AllocationInfo final {
     void* host;
 
 #ifdef IGPU_VULKAN
-    VkBuffer buffer;
+    vk::Buffer buffer;
     VmaAllocation alloc;
 #endif // IGPU_VULKAN
 };
 
 struct Queue_T final {
+    QueueType type;
+
 #ifdef IGPU_VULKAN
     vk::Queue queue;
     uint32_t family;
@@ -78,6 +80,13 @@ struct Pipeline_T final {
 #endif // IGPU_VULKAN
 };
 
+struct CommandList_T final {
+#ifdef IGPU_VULKAN
+    vk::CommandPool pool = nullptr;
+    vk::CommandBuffer cmd = nullptr;
+#endif // IGPU_VULKAN
+};
+
 struct RenderingDevice_T final {
 #ifdef IGPU_VULKAN
     vk::Instance instance = nullptr;
@@ -86,14 +95,12 @@ struct RenderingDevice_T final {
     vk::PhysicalDevice physical_device = nullptr;
     vk::Device device = nullptr;
 
-    vk::Queue graphics = nullptr;
-    vk::Queue compute = nullptr;
-    vk::Queue present = nullptr;
-
     vk::SurfaceKHR surface = nullptr;
     vk::SwapchainKHR swapchain = nullptr;
 
-    vk::PipelineLayout layout = nullptr;
+    vk::Fence submit_fence = nullptr;
+    vk::CommandPool command_pool = nullptr;
+    vk::PipelineLayout pipeline_layout = nullptr;
 
     VmaAllocator vma = nullptr;
 #endif // IGPU_VULKAN
@@ -103,8 +110,32 @@ struct RenderingDevice_T final {
     std::unordered_map<GpuAddr, AllocationInfo> allocations = {};
     std::unordered_map<void*, GpuAddr> addresses = {};
 
+    std::unordered_map<CommandList, CommandList_T> commands = {};
+    std::unordered_map<QueueType, Queue_T> queues = {};
     std::unordered_map<Semaphore, Semaphore_T> semaphores = {};
     std::unordered_map<Pipeline, Pipeline_T> pipelines = {};
+
+    CommandList_T& getCommandList(CommandList list) {
+        auto it = commands.find(list);
+        IGPU_ASSERT(it != commands.end(), "invalid CommandList handle!");
+        return it->second;
+    }
+
+    Queue_T& getQueue(QueueType queue) {
+        return queues.at(queue);
+    }
+
+    Semaphore_T& getSemaphore(Semaphore sema) {
+        auto it = semaphores.find(sema);
+        IGPU_ASSERT(it != semaphores.end(), "invalid Semaphore handle!");
+        return it->second;
+    }
+
+    Pipeline_T& getPipeline(Pipeline pipeline) {
+        auto it = pipelines.find(pipeline);
+        IGPU_ASSERT(it != pipelines.end(), "invalid Pipeline handle!");
+        return it->second;
+    }
 };
 
 #ifdef IGPU_VULKAN
@@ -287,6 +318,7 @@ GpuAddr RenderingDevice::malloc(uint64_t size, MemoryType type) {
     alloc.type = type;
 
 #ifdef IGPU_VULKAN
+
     static constexpr vk::BufferUsageFlags usage = 
         vk::BufferUsageFlagBits::eStorageBuffer 
       | vk::BufferUsageFlagBits::eIndirectBuffer
@@ -383,16 +415,13 @@ void RenderingDevice::free(GpuAddr addr) {
     if (it == m_impl->allocations.end())
         return;
 
-    AllocationInfo info = it->second; // Important copy.
-    info.device = 0;
-    info.host = nullptr;
+    AllocationInfo info = it->second;
 
 #ifdef IGPU_VULKAN
-    if (info.alloc) {
-        vmaDestroyBuffer(m_impl->vma, info.buffer, info.alloc);
-        info.alloc = nullptr;
-        info.buffer = nullptr;
-    }
+
+    // @Todo: Check for null allocation here, maybe.
+    vmaDestroyBuffer(m_impl->vma, info.buffer, info.alloc);
+
 #endif // IGPU_VULKAN
 
     m_impl->allocations.erase(it);
@@ -420,15 +449,103 @@ GpuAddr RenderingDevice::hostToDeviceAddress(void* ptr) {
     return 0;
 }
 
-Semaphore RenderingDevice::createSemaphore() {
+CommandList RenderingDevice::beginRecording(QueueType queue) {
+    CommandList_T list = {};
+
+#ifdef IGPU_VULKAN
+
+    auto pool_info = vk::CommandPoolCreateInfo {}
+        .setFlags(vk::CommandPoolCreateFlagBits::eTransient)
+        .setQueueFamilyIndex(m_impl->getQueue(queue).family);
+    
+    vk::Result result = m_impl->device.createCommandPool(
+        &pool_info, 
+        nullptr, 
+        &list.pool);
+
+    if (result != vk::Result::eSuccess)
+        return 0;
+
+    auto buffer_info = vk::CommandBufferAllocateInfo {}
+        .setCommandBufferCount(1)
+        .setCommandPool(list.pool)
+        .setLevel(vk::CommandBufferLevel::ePrimary);
+
+    result = m_impl->device.allocateCommandBuffers(&buffer_info, &list.cmd);
+    if (result != vk::Result::eSuccess) {
+        m_impl->device.destroyCommandPool(list.pool);
+        return 0;
+    }
+
+    auto begin_info = vk::CommandBufferBeginInfo {}
+        .setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+
+    if (list.cmd.begin(begin_info) != vk::Result::eSuccess) {
+        m_impl->device.destroyCommandPool(list.pool);
+        return 0;
+    }
+
+#endif // IGPU_VULKAN
+
+    CommandList handle = m_impl->commands.size();
+    m_impl->commands.emplace(handle, list);
+    return handle;
+}
+
+void RenderingDevice::submit(QueueType queue, 
+                             TimelinePair signal, 
+                             TimelinePair wait, 
+                             std::span<CommandList> lists) {
+#ifdef IGPU_VULKAN
+
+    std::vector<vk::CommandBufferSubmitInfo> buffers = {};
+    buffers.reserve(lists.size());
+
+    for (CommandList list : lists) {
+        buffers.push_back(vk::CommandBufferSubmitInfo {}
+            .setCommandBuffer(m_impl->getCommandList(list).cmd));
+    }
+
+    auto signal_info = vk::SemaphoreSubmitInfo {}
+        .setSemaphore(m_impl->getSemaphore(signal.sema).sema)
+        .setValue(signal.value);
+
+    auto wait_info = vk::SemaphoreSubmitInfo {}
+        .setSemaphore(m_impl->getSemaphore(wait.sema).sema)
+        .setValue(wait.value);
+
+    auto submit_info = vk::SubmitInfo2 {}
+        .setCommandBufferInfoCount(static_cast<uint32_t>(buffers.size()))
+        .setPCommandBufferInfos(buffers.data())
+        .setSignalSemaphoreInfoCount(1)
+        .setPSignalSemaphoreInfos(&signal_info)
+        .setWaitSemaphoreInfoCount(1)
+        .setPWaitSemaphoreInfos(&wait_info);
+
+    vk::Result result = m_impl->getQueue(queue).queue.submit2(submit_info);
+    IGPU_ASSERT(result == vk::Result::eSuccess, 
+                "Failed to submit command lists.");
+
+#endif // IGPU_VULKAN
+}
+
+Semaphore RenderingDevice::createSemaphore(uint64_t value) {
     Semaphore_T sema = {};
 
 #ifdef IGPU_VULKAN
-    auto sema_info = vk::SemaphoreCreateInfo {};
 
-    vk::Result result = m_impl->device.createSemaphore(&sema_info, 
-                                                       nullptr, 
-                                                       &sema.sema);
+    auto type_info = vk::SemaphoreTypeCreateInfo {}
+        .setSemaphoreType(vk::SemaphoreType::eTimeline)
+        .setInitialValue(value);
+
+    auto sema_info = vk::SemaphoreCreateInfo {}
+        .setPNext(&type_info);
+
+    vk::Result result = m_impl->device.createSemaphore(
+        &sema_info, 
+        nullptr, 
+        &sema.sema);
+
     if (result != vk::Result::eSuccess)
         return 0;
 
@@ -448,28 +565,29 @@ void RenderingDevice::freeSemaphore(Semaphore sema) {
     Semaphore_T& igpu_sema = it->second;
 
 #ifdef IGPU_VULKAN
+
     if (igpu_sema.sema) {
         m_impl->device.destroySemaphore(igpu_sema.sema);
         igpu_sema.sema = nullptr;
     }
+
 #endif // IGPU_VULKAN
 
     m_impl->semaphores.erase(it);
 }
 
 void RenderingDevice::waitSemaphore(Semaphore sema, uint64_t value) {
-    auto it = m_impl->semaphores.find(sema);
-    IGPU_ASSERT(it != m_impl->semaphores.end(), "Handle is invalid!");
-
-    Semaphore_T& igpu_sema = it->second;
+    Semaphore_T& igpu_sema = m_impl->getSemaphore(sema);
 
 #ifdef IGPU_VULKAN
+
     auto wait_info = vk::SemaphoreWaitInfo {}
         .setSemaphoreCount(1)
         .setPSemaphores(&igpu_sema.sema);
 
-    vk::Result result = m_impl->device.waitSemaphores(&wait_info, value);
-    IGPU_ASSERT(result == vk::Result::eSuccess, "Failed to wait on semaphore!");
+    // @Todo: Figure out what to do with result.
+    (void) m_impl->device.waitSemaphores(&wait_info, value);
+
 #endif // IGPU_VULKAN
 }
 
@@ -477,17 +595,14 @@ Pipeline RenderingDevice::createComputePipeline(std::string_view compute) {
     Pipeline_T pipeline = {};
 
 #ifdef IGPU_VULKAN
+
     auto pipeline_info = vk::ComputePipelineCreateInfo {}
         .setFlags(vk::PipelineCreateFlagBits::eDescriptorBufferEXT)
-        .setLayout(m_impl->layout)
+        .setLayout(m_impl->pipeline_layout)
         .setStage(createShaderStage(*m_impl, compute, vk::ShaderStageFlagBits::eCompute));
 
     vk::Result result = m_impl->device.createComputePipelines(
-        nullptr,
-        1, 
-        &pipeline_info, 
-        nullptr, 
-        &pipeline.pipeline);
+        nullptr, 1, &pipeline_info, nullptr, &pipeline.pipeline);
 
     // Shader module is useless now.
     if (pipeline_info.stage.module)
@@ -495,10 +610,11 @@ Pipeline RenderingDevice::createComputePipeline(std::string_view compute) {
 
     if (result != vk::Result::eSuccess)
         return 0;
+
 #endif // IGPU_VULKAN
 
     Pipeline handle = m_impl->pipelines.size();
-    m_impl->pipelines.try_emplace(handle, pipeline);
+    m_impl->pipelines.emplace(handle, pipeline);
     return handle;
 }
 
@@ -508,6 +624,7 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
     Pipeline_T pipeline = {};
 
 #ifdef IGPU_VULKAN
+
     // Collect color attachment formats as Vulkan formats.
     std::vector<vk::Format> formats = {};
     for (const AttachmentInfo& att : info.atts)
@@ -582,7 +699,7 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
         .setFlags(vk::PipelineCreateFlagBits::eDescriptorBufferEXT)
         .setStageCount(static_cast<uint32_t>(stages.size()))
         .setPStages(stages.data())
-        .setLayout(m_impl->layout)
+        .setLayout(m_impl->pipeline_layout)
         .setPVertexInputState(&input_info)
         .setPInputAssemblyState(&assembly_info)
         .setPViewportState(&viewport_info)
@@ -610,6 +727,7 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
 
     if (result != vk::Result::eSuccess)
         return 0;
+
 #endif // IGPU_VULKAN
 
     Pipeline handle = m_impl->pipelines.size();
@@ -626,10 +744,12 @@ void RenderingDevice::freePipeline(Pipeline pipeline) {
     Pipeline_T& igpu_pipeline = it->second;
 
 #ifdef IGPU_VULKAN
+
     if (igpu_pipeline.pipeline) {
         m_impl->device.destroyPipeline(igpu_pipeline.pipeline);
         igpu_pipeline.pipeline = nullptr;
     }
+
 #endif // IGPU_VULKAN
 
     m_impl->pipelines.erase(it);

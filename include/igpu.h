@@ -17,10 +17,9 @@ using GpuAddr = uint64_t;
 
 using Texture = uint64_t;
 using Pipeline = uint64_t;
-using Queue = uint64_t;
 using Semaphore = uint64_t;
+using CommandList = uint64_t;
 
-struct CommandBuffer_T;
 struct RenderingDevice_T; 
 
 enum class MemoryType : int32_t {
@@ -174,9 +173,9 @@ enum class BorderColor : int32_t {
 };
 
 enum class QueueType : int32_t {
-    eGraphics,
-    eCompute,
-    eTransfer,
+    eGraphics = 0,
+    eCompute = 1,
+    eTransfer = 2,
 };
 
 struct Rect2D {
@@ -207,6 +206,11 @@ using ClearColorValue = Color;
 struct ClearDepthStencilValue {
     float depth;
     uint32_t stencil;
+};
+
+struct TimelinePair final {
+    Semaphore sema;
+    uint64_t value;
 };
 
 struct TextureInfo {
@@ -306,36 +310,6 @@ struct TextureDescriptor final {
     uint64_t data[4];
 };
 
-class CommandBuffer {
-public:
-    void copy(void* gdest, void* gsrc);
-    void copyToTexture(void* gdest, void* gsrc, Texture texture);
-    void copyFromTexture(void* gdest, void* gsrc, Texture texture);
-
-    void signalAfter(Stage stage, void* gptr, uint64_t value);
-    void waitBefore(Stage stage, void* gptr, uint64_t value, CompareOp op);
-
-    void setPipeline(Pipeline pipeline);
-
-    void setViewport(Viewport viewport);
-    void setScissor(Rect2D rect);
-    void setDepthBias(float clamp, float slope, float constant);
-    void setDepthCompareOp(CompareOp op);
-    void setEnableDepthTest(bool value);
-    void setEnableDepthWrite(bool value);
-    void setStencilReference(float value);
-
-    void setActiveTextureHeapPtr(void* gptr);
-
-    void beginRendering(const RenderingInfo& info);
-
-    void endRendering();
-
-    void dispatch(void* data, uint32_t x, uint32_t y, uint32_t z);
-
-    void barrier(Stage before, Stage after);
-};
-
 struct RenderingDeviceInfo {
     void* window = nullptr;
     Format surface = Format::eRGBA8Unorm;
@@ -371,11 +345,13 @@ public:
     TextureDescriptor getTextureViewDescriptor(Texture texture, const ViewInfo& info);
     TextureDescriptor getRWTextureViewDescriptor(Texture texture, const ViewInfo& info);
 
-    Queue createQueue(QueueType type);
-    CommandBuffer beginRecording(Queue queue);
-    void submit(Queue queue, std::span<CommandBuffer> buffers);
+    CommandList beginRecording(QueueType queue);
+    void submit(QueueType queue, 
+                TimelinePair signal, 
+                TimelinePair wait, 
+                std::span<CommandList> lists);
 
-    Semaphore createSemaphore();
+    Semaphore createSemaphore(uint64_t value);
     void freeSemaphore(Semaphore sema);
     void waitSemaphore(Semaphore sema, uint64_t value);
 
@@ -386,8 +362,35 @@ public:
     void freePipeline(Pipeline pipeline);
 
     Texture getSwapchainTexture(Semaphore acquire);
-    void present(Queue queue, Semaphore wait);
+    void present(QueueType queue, Semaphore present);
     void resizeSwapchain(uint32_t width, uint32_t height);
+
+    void copy(CommandList cmd, GpuAddr dst, GpuAddr src);
+    void copyToTexture(CommandList cmd, GpuAddr dst, GpuAddr src, Texture texture);
+    void copyFromTexture(CommandList cmd, GpuAddr dst, GpuAddr src, Texture texture);
+
+    void signalAfter(CommandList cmd, Stage stage, GpuAddr addr, uint64_t value);
+    void waitBefore(CommandList cmd, Stage stage, GpuAddr addr, uint64_t value, CompareOp op);
+
+    void setPipeline(CommandList cmd, Pipeline pipeline);
+
+    void setViewport(CommandList cmd, Viewport viewport);
+    void setScissor(CommandList cmd, Rect2D rect);
+    void setDepthBias(CommandList cmd, float clamp, float slope, float constant);
+    void setDepthCompareOp(CommandList cmd, CompareOp op);
+    void setEnableDepthTest(CommandList cmd, bool value);
+    void setEnableDepthWrite(CommandList cmd, bool value);
+    void setStencilReference(CommandList cmd, float value);
+
+    void setActiveTextureHeapAddress(CommandList cmd, GpuAddr addr);
+
+    void beginRendering(CommandList cmd, const RenderingInfo& info);
+
+    void endRendering(CommandList cmd);
+
+    void dispatch(CommandList cmd, void* data, uint32_t x, uint32_t y, uint32_t z);
+
+    void barrier(CommandList cmd, Stage before, Stage after);
 };
 
 } // namespace gpu
