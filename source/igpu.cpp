@@ -120,6 +120,8 @@ struct AllocationInfo final {
 };
 
 struct Texture_T final {
+    TextureInfo info;
+
 #ifdef IGPU_VULKAN
     vk::Image image;
     VmaAllocation alloc;
@@ -617,6 +619,7 @@ GpuAddr RenderingDevice::hostToDeviceAddress(void* ptr) {
 
 Texture RenderingDevice::createTexture(const TextureInfo& info, GpuAddr addr) {
     Texture_T texture = {};
+    texture.info = info;
 
 #ifdef IGPU_VULKAN
 
@@ -994,85 +997,105 @@ void RenderingDevice::freePipeline(Pipeline pipeline) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setPipeline(CommandList cmd, Pipeline pipeline) {
+void RenderingDevice::copy(CommandList cmd, GpuAddr src, GpuAddr dst, uint32_t size) {
     CommandList_T i_cmd = m_impl->lists.get(cmd);
-    Pipeline_T& i_pipeline = m_impl->pipelines.get(pipeline);
+
+    IGPU_ASSERT(m_impl->allocations.contains(src), 
+                "Invalid device source address!");
+    
+    AllocationInfo src_alloc = m_impl->allocations[src];
+
+    IGPU_ASSERT(m_impl->allocations.contains(dst), 
+                "Invalid device destination address!");
+    
+    AllocationInfo dst_alloc = m_impl->allocations[dst];
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.bindPipeline(VK_PipelineTypeToBindPoint(i_pipeline.type), 
-                              i_pipeline.pipeline);
+    auto region = vk::BufferCopy2 {}
+        .setSize(size);
+
+    i_cmd.buffer.copyBuffer2(vk::CopyBufferInfo2 {}
+        .setSrcBuffer(src_alloc.buffer)
+        .setDstBuffer(dst_alloc.buffer)
+        .setRegionCount(1)
+        .setPRegions(&region));
 
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setViewport(CommandList cmd, Viewport viewport) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+void RenderingDevice::copyToTexture(void* src, Texture dst, const TextureRegion& region) {
+    Texture_T i_texture = m_impl->textures.get(dst);
+
+    const TextureInfo& info = i_texture.info;
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.setViewport(0, vk::Viewport {}
-        .setX(viewport.x)
-        .setY(viewport.y)
-        .setHeight(viewport.height)
-        .setWidth(viewport.width)
-        .setMinDepth(viewport.min_depth)
-        .setMaxDepth(viewport.max_depth));
+    auto copy = vk::MemoryToImageCopy {}
+        .setPHostPointer(src)
+        .setMemoryRowLength(0)
+        .setMemoryImageHeight(0)
+        .setImageOffset({ region.offset[0], region.offset[1], region.offset[2] })
+        .setImageExtent({ region.extent[0], region.extent[1], region.extent[2] })
+        .setImageSubresource(vk::ImageSubresourceLayers {}
+            .setMipLevel(region.mip)
+            .setBaseArrayLayer(region.base_layer)
+            .setLayerCount(region.layer_count)
+            .setAspectMask(VK_FormatToAspectMask(info.format)));
+
+    // @Todo: Return custom result value.
+    (void) m_impl->device.copyMemoryToImage(vk::CopyMemoryToImageInfo {}
+        .setDstImage(i_texture.image)
+        .setDstImageLayout(vk::ImageLayout::eGeneral)
+        .setRegionCount(1)
+        .setPRegions(&copy));
 
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setScissor(CommandList cmd, Rect2D scissor) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+void RenderingDevice::copyFromTexture(Texture src, void* dst, const TextureRegion& region) {
+    Texture_T i_texture = m_impl->textures.get(src);
+
+    const TextureInfo& info = i_texture.info;
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.setScissor(0, vk::Rect2D {}
-        .setOffset({ scissor.x, scissor.y })
-        .setExtent({ scissor.width, scissor.height }));
+    auto copy = vk::ImageToMemoryCopy {}
+        .setPHostPointer(dst)
+        .setMemoryRowLength(0)
+        .setMemoryImageHeight(0)
+        .setImageOffset({ region.offset[0], region.offset[1], region.offset[2] })
+        .setImageExtent({ region.extent[0], region.extent[1], region.extent[2] })
+        .setImageSubresource(vk::ImageSubresourceLayers {}
+            .setMipLevel(region.mip)
+            .setBaseArrayLayer(region.base_layer)
+            .setLayerCount(region.layer_count)
+            .setAspectMask(VK_FormatToAspectMask(info.format)));
+
+    // @Todo: Return custom result value.
+    (void) m_impl->device.copyImageToMemory(vk::CopyImageToMemoryInfo {}
+        .setSrcImage(i_texture.image)
+        .setSrcImageLayout(vk::ImageLayout::eGeneral)
+        .setRegionCount(1)
+        .setPRegions(&copy));
 
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setDepthBias(CommandList cmd, 
-                                   float clamp, 
-                                   float slope, 
-                                   float constant) {
+void RenderingDevice::barrier(CommandList cmd, Stage before, Stage after) {
     CommandList_T i_cmd = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.setDepthBias(constant, clamp, slope);
+    auto barrier = vk::MemoryBarrier2 {}
+        .setSrcStageMask(VK_ConvertPipelineStage(before))
+        .setDstStageMask(VK_ConvertPipelineStage(after))
+        .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite)
+        .setDstAccessMask(vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead);
 
-#endif // IGPU_VULKAN
-}
-
-void RenderingDevice::setDepthCompareOp(CommandList cmd, CompareOp op) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
-
-#ifdef IGPU_VULKAN
-
-    i_cmd.buffer.setDepthCompareOp(VK_ConvertCompareOp(op));
-
-#endif // IGPU_VULKAN
-}
-
-void RenderingDevice::setEnableDepthTest(CommandList cmd, bool value) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
-
-#ifdef IGPU_VULKAN
-
-    i_cmd.buffer.setDepthTestEnable(value);
-
-#endif // IGPU_VULKAN
-}
-
-void RenderingDevice::setEnableDepthWrite(CommandList cmd, bool value) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
-
-#ifdef IGPU_VULKAN
-
-    i_cmd.buffer.setDepthWriteEnable(value);
+    i_cmd.buffer.pipelineBarrier2(vk::DependencyInfo {}
+        .setMemoryBarrierCount(1)
+        .setPMemoryBarriers(&barrier));
 
 #endif // IGPU_VULKAN
 }
@@ -1171,6 +1194,132 @@ void RenderingDevice::endRendering(CommandList cmd) {
 #endif // IGPU_VULKAN
 }
 
+void RenderingDevice::setActiveTextureHeapAddress(CommandList cmd, 
+                                                  GpuAddr addr) {
+    // @Todo: Implement this.
+}
+
+void RenderingDevice::setPipeline(CommandList cmd, Pipeline pipeline) {
+    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    Pipeline_T& i_pipeline = m_impl->pipelines.get(pipeline);
+
+#ifdef IGPU_VULKAN
+
+    i_cmd.buffer.bindPipeline(VK_PipelineTypeToBindPoint(i_pipeline.type), 
+                              i_pipeline.pipeline);
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::setViewport(CommandList cmd, Viewport viewport) {
+    CommandList_T i_cmd = m_impl->lists.get(cmd);
+
+#ifdef IGPU_VULKAN
+
+    i_cmd.buffer.setViewport(0, vk::Viewport {}
+        .setX(viewport.x)
+        .setY(viewport.y)
+        .setHeight(viewport.height)
+        .setWidth(viewport.width)
+        .setMinDepth(viewport.min_depth)
+        .setMaxDepth(viewport.max_depth));
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::setScissor(CommandList cmd, Rect2D scissor) {
+    CommandList_T i_cmd = m_impl->lists.get(cmd);
+
+#ifdef IGPU_VULKAN
+
+    i_cmd.buffer.setScissor(0, vk::Rect2D {}
+        .setOffset({ scissor.x, scissor.y })
+        .setExtent({ scissor.width, scissor.height }));
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::setDepthBias(CommandList cmd, 
+                                   float clamp, 
+                                   float slope, 
+                                   float constant) {
+    CommandList_T i_cmd = m_impl->lists.get(cmd);
+
+#ifdef IGPU_VULKAN
+
+    i_cmd.buffer.setDepthBias(constant, clamp, slope);
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::setDepthCompareOp(CommandList cmd, CompareOp op) {
+    CommandList_T i_cmd = m_impl->lists.get(cmd);
+
+#ifdef IGPU_VULKAN
+
+    i_cmd.buffer.setDepthCompareOp(VK_ConvertCompareOp(op));
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::setEnableDepthTest(CommandList cmd, bool value) {
+    CommandList_T i_cmd = m_impl->lists.get(cmd);
+
+#ifdef IGPU_VULKAN
+
+    i_cmd.buffer.setDepthTestEnable(value);
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::setEnableDepthWrite(CommandList cmd, bool value) {
+    CommandList_T i_cmd = m_impl->lists.get(cmd);
+
+#ifdef IGPU_VULKAN
+
+    i_cmd.buffer.setDepthWriteEnable(value);
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::drawInstanced(CommandList cmd,
+                                    GpuAddr vertex, 
+                                    GpuAddr fragment, 
+                                    uint32_t vertices, 
+                                    uint32_t instances) {
+    CommandList_T i_cmd = m_impl->lists.get(cmd);
+
+#ifdef IGPU_VULKAN
+
+    // @Todo: Setup push constants at the vertex and fragment offsets.
+    // e.g. i_cmd.buffer.pushConstants(pipeline_layout, stage, offset, sizeof(GpuAddr), &vertex);
+    i_cmd.buffer.draw(vertices, instances, 0, 0);
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::drawIndexedInstanced(CommandList cmd,
+                                           GpuAddr vertex,
+                                           GpuAddr fragment,
+                                           GpuAddr index,
+                                           uint32_t indices,
+                                           uint32_t instances) {
+    CommandList_T i_cmd = m_impl->lists.get(cmd);
+
+#ifdef IGPU_VULKAN
+
+    // @Todo: Setup pcs...
+
+    // @Todo: Get the buffer and offset of the index data.
+    vk::Buffer ibo = nullptr;
+    vk::DeviceSize offset = 0;
+
+    //i_cmd.buffer.bindIndexBuffer(ibo, ibo_offset, vk::IndexType::eUint32);
+    i_cmd.buffer.drawIndexed(indices, instances, 0, 0, 0);
+
+#endif // IGPU_VULKAN
+}
+
 void RenderingDevice::dispatch(CommandList cmd, 
                                GpuAddr data, 
                                uint32_t x, 
@@ -1182,24 +1331,6 @@ void RenderingDevice::dispatch(CommandList cmd,
 
     // @Todo: Setup push constants at the compute offset with the given data.
     i_cmd.buffer.dispatch(x, y, z);
-
-#endif // IGPU_VULKAN
-}
-
-void RenderingDevice::barrier(CommandList cmd, Stage before, Stage after) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
-
-#ifdef IGPU_VULKAN
-
-    auto barrier = vk::MemoryBarrier2 {}
-        .setSrcStageMask(VK_ConvertPipelineStage(before))
-        .setDstStageMask(VK_ConvertPipelineStage(after))
-        .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite)
-        .setDstAccessMask(vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead);
-
-    i_cmd.buffer.pipelineBarrier2(vk::DependencyInfo {}
-        .setMemoryBarrierCount(1)
-        .setPMemoryBarriers(&barrier));
 
 #endif // IGPU_VULKAN
 }

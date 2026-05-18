@@ -219,6 +219,14 @@ struct TextureInfo final {
     std::array<uint32_t, 3> dimensions;
 };
 
+struct TextureRegion final {
+    uint8_t mip = 0;
+    uint16_t base_layer = 0;
+    uint16_t layer_count = 1;
+    std::array<int32_t, 3> offset = {};
+    std::array<uint32_t, 3> extent = {};
+};
+
 struct TextureViewInfo final {
     Format format = Format::eUndefined;
     uint16_t base_layer = 0;
@@ -352,13 +360,22 @@ public:
     void present(QueueType queue, Semaphore present);
     void resizeSwapchain(uint32_t width, uint32_t height);
 
-    void copy(CommandList cmd, GpuAddr dst, GpuAddr src);
-    void copyToTexture(CommandList cmd, GpuAddr dst, GpuAddr src, Texture texture);
-    void copyFromTexture(CommandList cmd, GpuAddr dst, GpuAddr src, Texture texture);
+    void copy(CommandList cmd, GpuAddr src, GpuAddr dst, uint32_t size);
+    void copyToTexture(void* src, Texture dst, const TextureRegion& region);
+    void copyFromTexture(Texture src, void* dst, const TextureRegion& region);
 
+    void barrier(CommandList cmd, Stage before, Stage after);
+
+    /*
     void signalAfter(CommandList cmd, Stage stage, GpuAddr addr, uint64_t value);
     void waitBefore(CommandList cmd, Stage stage, GpuAddr addr, uint64_t value, CompareOp op);
+    */
 
+    void beginRendering(CommandList cmd, const RenderingInfo& info);
+    void endRendering(CommandList cmd);
+
+    void setActiveTextureHeapAddress(CommandList cmd, GpuAddr addr);
+    
     void setPipeline(CommandList cmd, Pipeline pipeline);
     void setViewport(CommandList cmd, Viewport viewport);
     void setScissor(CommandList cmd, Rect2D rect);
@@ -367,15 +384,21 @@ public:
     void setEnableDepthTest(CommandList cmd, bool value);
     void setEnableDepthWrite(CommandList cmd, bool value);
 
-    void setActiveTextureHeapAddress(CommandList cmd, GpuAddr addr);
-
-    void beginRendering(CommandList cmd, const RenderingInfo& info);
-
-    void endRendering(CommandList cmd);
+    void drawInstanced(
+        CommandList cmd,
+        GpuAddr vertex, 
+        GpuAddr fragment, 
+        uint32_t vertices, 
+        uint32_t instances);
+    void drawIndexedInstanced(
+        CommandList cmd,
+        GpuAddr vertex,
+        GpuAddr fragment,
+        GpuAddr index,
+        uint32_t indices,
+        uint32_t instances);
 
     void dispatch(CommandList cmd, GpuAddr data, uint32_t x, uint32_t y, uint32_t z);
-
-    void barrier(CommandList cmd, Stage before, Stage after);
 };
 
 } // namespace gpu
