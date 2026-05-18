@@ -169,20 +169,20 @@ enum class BorderColor : int32_t {
     eIntOpaqueWhite,  
 };
 
-enum class QueueType : int32_t {
+enum class QueueType : uint32_t {
     eGraphics = 0,
     eCompute = 1,
     eTransfer = 2,
 };
 
-struct Rect2D {
+struct Rect2D final {
     int32_t x;
     int32_t y;
     uint32_t width;
     uint32_t height;
 };
 
-struct Viewport {
+struct Viewport final {
     float x;
     float y;
     float width;
@@ -191,7 +191,7 @@ struct Viewport {
     float max_depth;
 };
 
-struct Color {
+struct Color final {
     float r;
     float g;
     float b;
@@ -200,17 +200,16 @@ struct Color {
 
 using ClearColorValue = Color;
 
-struct ClearDepthStencilValue {
-    float depth;
-    uint32_t stencil;
-};
+using ClearDepthValue = float;
+
+using ClearStencilValue = uint32_t;
 
 struct TimelinePair final {
     Semaphore sema = 0;
     uint64_t value = 0;
 };
 
-struct TextureInfo {
+struct TextureInfo final {
     TextureType type = TextureType::e2D;
     Format format = Format::eUndefined;
     Usage usage;
@@ -220,7 +219,7 @@ struct TextureInfo {
     std::array<uint32_t, 3> dimensions;
 };
 
-struct TextureViewInfo {
+struct TextureViewInfo final {
     Format format = Format::eUndefined;
     uint16_t base_layer = 0;
     uint16_t layer_count = 1;
@@ -228,7 +227,7 @@ struct TextureViewInfo {
     uint8_t mip_count = 1;
 };
 
-struct SamplerInfo {
+struct SamplerInfo final {
     Filter min = Filter::eLinear;
     Filter mag = Filter::eLinear;
     Filter mip = Filter::eLinear;
@@ -245,7 +244,7 @@ struct SamplerInfo {
     BorderColor border;
 };
 
-struct AttachmentInfo {
+struct AttachmentInfo final {
     Format format = Format::eUndefined;
     BlendOp color_op = BlendOp::eAdd;
     Factor src_color_factor = Factor::eOne;
@@ -256,12 +255,7 @@ struct AttachmentInfo {
     uint32_t color_write_mask = 0xFF;
 };
 
-struct DepthStencilInfo final {
-    Format depth = Format::eUndefined;
-    Format stencil = Format::eUndefined;
-};
-
-struct RasterInfo {
+struct RasterInfo final {
     Topology topology = Topology::eTriangleList;
     Cull cull = Cull::eNone;
     Fill fill = Fill::eFill;
@@ -275,10 +269,12 @@ struct RasterInfo {
 struct TargetInfo final {
     LoadOp load;
     StoreOp store;
+    TextureView view;
 
     union {
         ClearColorValue clear_color;
-        ClearDepthStencilValue clear_depth;
+        ClearDepthValue clear_depth;
+        ClearStencilValue clear_stencil;
     };
 };
 
@@ -294,13 +290,13 @@ struct TextureDescriptor final {
     std::array<uint64_t, 4> data;
 };
 
-struct RenderingDeviceInfo {
+struct RenderingDeviceInfo final {
     void* window = nullptr;
     Format surface = Format::eRGBA8Unorm;
     bool validation = false;
 };
 
-class RenderingDevice {
+class RenderingDevice final {
     struct RenderingDevice_T* m_impl = nullptr;
 
     explicit RenderingDevice(RenderingDevice_T* impl) : m_impl(impl) {}
@@ -364,14 +360,12 @@ public:
     void waitBefore(CommandList cmd, Stage stage, GpuAddr addr, uint64_t value, CompareOp op);
 
     void setPipeline(CommandList cmd, Pipeline pipeline);
-
     void setViewport(CommandList cmd, Viewport viewport);
     void setScissor(CommandList cmd, Rect2D rect);
     void setDepthBias(CommandList cmd, float clamp, float slope, float constant);
     void setDepthCompareOp(CommandList cmd, CompareOp op);
     void setEnableDepthTest(CommandList cmd, bool value);
     void setEnableDepthWrite(CommandList cmd, bool value);
-    void setStencilReference(CommandList cmd, float value);
 
     void setActiveTextureHeapAddress(CommandList cmd, GpuAddr addr);
 
@@ -379,7 +373,7 @@ public:
 
     void endRendering(CommandList cmd);
 
-    void dispatch(CommandList cmd, void* data, uint32_t x, uint32_t y, uint32_t z);
+    void dispatch(CommandList cmd, GpuAddr data, uint32_t x, uint32_t y, uint32_t z);
 
     void barrier(CommandList cmd, Stage before, Stage after);
 };
