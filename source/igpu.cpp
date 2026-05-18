@@ -42,6 +42,17 @@
     #else
         #include "vma.h"
     #endif // defined(__clang__)
+
+    #define VK_CHECK(result) \
+        do { \
+            if ((result) != vk::Result::eSuccess) { \
+                std::cerr << "Check failed: " \
+                          << vk::to_string(result) << ", " \
+                          << "file: " << __FILE__ << ", " \
+                          << "line: " << __LINE__ << std::endl; \
+                std::abort(); \
+            } \
+        } while (false)
 #endif // IGPU_VULKAN
 
 #ifdef IGPU_GLFW
@@ -122,6 +133,9 @@ struct AllocationInfo final {
 struct Texture_T final {
     TextureInfo info;
 
+    /// If this texture is borrowed e.g. from a swapchain.
+    bool borrowed;
+
 #ifdef IGPU_VULKAN
     vk::Image image;
     VmaAllocation alloc;
@@ -173,12 +187,16 @@ struct RenderingDevice_T final {
 #ifdef IGPU_VULKAN
     vk::Instance instance = nullptr;
     vk::DebugUtilsMessengerEXT messenger = nullptr;
+    vk::SurfaceKHR surface = nullptr;
 
     vk::PhysicalDevice physical_device = nullptr;
     vk::Device device = nullptr;
 
-    vk::SurfaceKHR surface = nullptr;
     vk::SwapchainKHR swapchain = nullptr;
+    std::vector<Texture> swapchain_textures = {};
+    std::vector<vk::Semaphore> swapchain_acquires = {};
+    std::vector<vk::Semaphore> swapchain_presents = {};
+    uint32_t swapchain_index = 0;
 
     vk::PipelineLayout pipeline_layout = nullptr;
 
@@ -276,7 +294,31 @@ static vk::PipelineStageFlags2 VK_ConvertPipelineStage(Stage stage) {
     }
 }
 
-static vk::ImageType textureTypeToVulkan(TextureType type) {
+static vk::Format VK_ConvertFormat(Format format) {
+    switch (format) {
+        case Format::eUndefined: 
+            return vk::Format::eUndefined;
+        case Format::eRGBA8Unorm: 
+            return vk::Format::eR8G8B8A8Unorm;
+        case Format::eD32Float: 
+            return vk::Format::eD32Sfloat;
+    }
+}
+
+static vk::PresentModeKHR VK_ConvertPresent(Present present) {
+    switch (present) {
+        case Present::eImmediate:
+            return vk::PresentModeKHR::eImmediate;
+        case Present::eFifo:
+            return vk::PresentModeKHR::eFifo;
+        case Present::eFifoRelaxed:
+            return vk::PresentModeKHR::eFifoRelaxed;
+        case Present::eMailbox:
+            return vk::PresentModeKHR::eMailbox;
+    }
+}
+
+static vk::ImageType VK_ConvertTextureType(TextureType type) {
     switch (type) {
         case TextureType::e1D:
         case TextureType::e1DArray:
@@ -291,18 +333,7 @@ static vk::ImageType textureTypeToVulkan(TextureType type) {
     }
 }
 
-static vk::Format formatToVulkan(Format format) {
-    switch (format) {
-        case Format::eUndefined: 
-            return vk::Format::eUndefined;
-        case Format::eRGBA8Unorm: 
-            return vk::Format::eR8G8B8A8Unorm;
-        case Format::eD32Float: 
-            return vk::Format::eD32Sfloat;
-    }
-}
-
-static vk::PrimitiveTopology topologyToVulkan(Topology topology) {
+static vk::PrimitiveTopology VK_ConvertTopology(Topology topology) {
     switch (topology) {
         case Topology::eLineList: 
             return vk::PrimitiveTopology::eLineList;
@@ -317,7 +348,7 @@ static vk::PrimitiveTopology topologyToVulkan(Topology topology) {
     }
 }
 
-static vk::CullModeFlags cullToVulkan(Cull cull) {
+static vk::CullModeFlags VK_ConvertCullMode(Cull cull) {
     switch (cull) {
         case Cull::eNone:
             return vk::CullModeFlagBits::eNone;
@@ -330,7 +361,7 @@ static vk::CullModeFlags cullToVulkan(Cull cull) {
     }
 }
 
-static vk::PolygonMode fillToVulkan(Fill fill) {
+static vk::PolygonMode VK_ConvertFillMode(Fill fill) {
     switch (fill) {
         case Fill::eFill:
             return vk::PolygonMode::eFill;
@@ -339,7 +370,7 @@ static vk::PolygonMode fillToVulkan(Fill fill) {
     }
 }
 
-static vk::ImageUsageFlagBits usageToVulkan(Usage usage) {
+static vk::ImageUsageFlagBits VK_ConvertUsage(Usage usage) {
     switch (usage) {
     case Usage::eTransferSrc:
         return vk::ImageUsageFlagBits::eTransferSrc;
@@ -356,7 +387,7 @@ static vk::ImageUsageFlagBits usageToVulkan(Usage usage) {
     }
 }
 
-static vk::SampleCountFlagBits samplesToVulkan(uint8_t sample_count) {
+static vk::SampleCountFlagBits VK_ConvertSampleCount(uint8_t sample_count) {
     switch (sample_count) {
         case 1:
             return vk::SampleCountFlagBits::e1;
@@ -373,7 +404,7 @@ static vk::SampleCountFlagBits samplesToVulkan(uint8_t sample_count) {
     return vk::SampleCountFlagBits::e1;
 }
 
-static vk::BlendOp blendOpToVulkan(BlendOp op) {
+static vk::BlendOp VK_ConvertBlendOp(BlendOp op) {
     switch (op) {
         case BlendOp::eAdd:
             return vk::BlendOp::eAdd;
@@ -388,7 +419,7 @@ static vk::BlendOp blendOpToVulkan(BlendOp op) {
     }
 }
 
-static vk::BlendFactor blendFactorToVulkan(Factor factor) {
+static vk::BlendFactor VK_ConvertBlendFactor(Factor factor) {
     switch (factor) {
         case Factor::eZero:
             return vk::BlendFactor::eZero;
@@ -423,7 +454,7 @@ static vk::BlendFactor blendFactorToVulkan(Factor factor) {
     }
 }
 
-static vk::StencilOp stencilOpToVulkan(StencilOp op) {
+static vk::StencilOp VK_ConvertStencilOp(StencilOp op) {
     switch (op) {
         case StencilOp::eKeep:
             return vk::StencilOp::eKeep;
@@ -617,6 +648,125 @@ GpuAddr RenderingDevice::hostToDeviceAddress(void* ptr) {
     return 0;
 }
 
+Texture RenderingDevice::acquireSwapchainTexture() {
+#ifdef IGPU_VULKAN
+
+    uint32_t index;
+    VK_CHECK(m_impl->device.acquireNextImageKHR(
+        m_impl->swapchain, 
+        UINT64_MAX, 
+        m_impl->swapchain_acquires[m_impl->swapchain_index], 
+        nullptr, 
+        &index));
+
+    m_impl->swapchain_index = index;
+    return m_impl->swapchain_textures[index];
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::present(QueueType queue) {
+#ifdef IGPU_VULKAN
+
+    Queue_T i_queue = m_impl->queues[static_cast<uint32_t>(queue)];
+    uint32_t index = m_impl->swapchain_index;
+
+    VK_CHECK(i_queue.queue.presentKHR(vk::PresentInfoKHR {}
+        .setWaitSemaphoreCount(1)
+        .setPWaitSemaphores(&m_impl->swapchain_presents[index])
+        .setSwapchainCount(1)
+        .setPSwapchains(&m_impl->swapchain)
+        .setPImageIndices(&index)));
+
+#endif // IGPU_VULKAN
+}
+
+void RenderingDevice::resizeSwapchain(uint32_t width, uint32_t height) {
+#ifdef IGPU_VULKAN
+
+    vk::Device device = m_impl->device;
+
+    VK_CHECK(device.waitIdle());
+
+    vk::SurfaceCapabilitiesKHR caps;
+    VK_CHECK(m_impl->physical_device.getSurfaceCapabilitiesKHR(
+        m_impl->surface, &caps));
+
+    vk::SwapchainKHR old_swapchain = m_impl->swapchain;
+
+    auto info = vk::SwapchainCreateInfoKHR {}
+        .setSurface(m_impl->surface)
+        .setMinImageCount(caps.minImageCount)
+        .setImageFormat(VK_ConvertFormat(m_info.format))
+        .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
+        .setImageExtent({ width, height })
+        .setImageArrayLayers(1)
+        .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
+        .setPreTransform(caps.currentTransform)
+        .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
+        .setClipped(vk::True)
+        .setPresentMode(VK_ConvertPresent(m_info.present))
+        .setOldSwapchain(old_swapchain);
+
+    VK_CHECK(device.createSwapchainKHR(&info, nullptr, &m_impl->swapchain));
+    device.destroySwapchainKHR(old_swapchain);
+
+    for (vk::Semaphore sema : m_impl->swapchain_acquires) {
+        device.destroySemaphore(sema);
+    }
+
+    for (vk::Semaphore sema : m_impl->swapchain_presents) {
+        device.destroySemaphore(sema);
+    }
+
+    // Fetch the number of swapchain images in use.
+    uint32_t num_images;
+    VK_CHECK(device.getSwapchainImagesKHR(m_impl->swapchain, 
+                                          &num_images, 
+                                          nullptr));
+
+    // Fetch the actual swapchain image handles.
+    std::vector<vk::Image> images(num_images);
+    VK_CHECK(device.getSwapchainImagesKHR(m_impl->swapchain, 
+                                          &num_images, 
+                                          images.data()));
+    
+    // @Todo: Destroy the views of all borrowed swapchain images.
+
+    m_impl->swapchain_textures.resize(num_images);
+    m_impl->swapchain_acquires.resize(num_images);
+    m_impl->swapchain_presents.resize(num_images);
+
+    auto sema_info = vk::SemaphoreCreateInfo {};
+
+    for (std::size_t i = 0; i < num_images; ++i) {
+        vk::Image image = images[i];
+
+        Texture_T texture = {};
+        texture.image = image;
+        texture.alloc = nullptr;
+        texture.views = {};
+        texture.borrowed = true;
+        texture.info = TextureInfo {
+            .type = TextureType::e2D,
+            .format = m_info.format,
+            .usage = Usage::eColorAttachment,
+            .dimensions = { width, height },
+        };
+
+        m_impl->swapchain_textures[i] = m_impl->textures.add(texture);
+
+        VK_CHECK(device.createSemaphore(&sema_info, 
+                                        nullptr, 
+                                        &m_impl->swapchain_acquires[i]));
+        VK_CHECK(device.createSemaphore(&sema_info, 
+                                        nullptr, 
+                                        &m_impl->swapchain_presents[i]));
+    }
+
+#endif // IGPU_VULKAN
+}
+
 Texture RenderingDevice::createTexture(const TextureInfo& info, GpuAddr addr) {
     Texture_T texture = {};
     texture.info = info;
@@ -630,13 +780,13 @@ Texture RenderingDevice::createTexture(const TextureInfo& info, GpuAddr addr) {
 
     auto image_info = vk::ImageCreateInfo {}
         .setFlags(flags)
-        .setFormat(formatToVulkan(info.format))
+        .setFormat(VK_ConvertFormat(info.format))
         .setExtent({ info.dimensions[0], info.dimensions[1], info.dimensions[3] })
-        .setImageType(textureTypeToVulkan(info.type))
+        .setImageType(VK_ConvertTextureType(info.type))
         .setMipLevels(info.mip_count)
         .setArrayLayers(info.layer_count)
-        .setSamples(samplesToVulkan(info.sample_count))
-        .setUsage(usageToVulkan(info.usage))
+        .setSamples(VK_ConvertSampleCount(info.sample_count))
+        .setUsage(VK_ConvertUsage(info.usage))
         .setSharingMode(vk::SharingMode::eConcurrent)
         .setInitialLayout(vk::ImageLayout::eUndefined)
         .setQueueFamilyIndexCount(1 /* @Todo */)
@@ -880,7 +1030,7 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
     // Collect color attachment formats as Vulkan formats.
     std::vector<vk::Format> formats = {};
     for (const AttachmentInfo& att : info.atts) {
-        formats.push_back(formatToVulkan(att.format));
+        formats.push_back(VK_ConvertFormat(att.format));
     }
 
     std::vector<vk::PipelineShaderStageCreateInfo> stages = {
@@ -901,10 +1051,10 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
     auto input_info = vk::PipelineVertexInputStateCreateInfo {};
 
     auto assembly_info = vk::PipelineInputAssemblyStateCreateInfo {}
-        .setTopology(topologyToVulkan(info.topology));
+        .setTopology(VK_ConvertTopology(info.topology));
 
     auto multisampling_info = vk::PipelineMultisampleStateCreateInfo {}
-        .setRasterizationSamples(samplesToVulkan(info.sample_count))
+        .setRasterizationSamples(VK_ConvertSampleCount(info.sample_count))
         .setAlphaToCoverageEnable(info.alpha_to_coverage);
 
     auto dynamic_info = vk::PipelineDynamicStateCreateInfo {}
@@ -917,8 +1067,8 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
         .setScissorCount(1);
 
     auto raster_info = vk::PipelineRasterizationStateCreateInfo {}
-        .setPolygonMode(fillToVulkan(info.fill))
-        .setCullMode(cullToVulkan(info.cull))
+        .setPolygonMode(VK_ConvertFillMode(info.fill))
+        .setCullMode(VK_ConvertCullMode(info.cull))
         .setFrontFace(vk::FrontFace::eCounterClockwise)
         .setLineWidth(1.f)
         .setDepthBiasEnable(vk::True);
@@ -926,20 +1076,20 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
     auto render_info = vk::PipelineRenderingCreateInfo {}
         .setColorAttachmentCount(static_cast<uint32_t>(formats.size()))
         .setPColorAttachmentFormats(formats.data())
-        .setDepthAttachmentFormat(formatToVulkan(info.depth))
-        .setStencilAttachmentFormat(formatToVulkan(info.stencil));
+        .setDepthAttachmentFormat(VK_ConvertFormat(info.depth))
+        .setStencilAttachmentFormat(VK_ConvertFormat(info.stencil));
 
     std::vector<vk::PipelineColorBlendAttachmentState> blend_states = {};
     blend_states.reserve(info.atts.size());
 
     for (const AttachmentInfo& att : info.atts) {
         blend_states.push_back(vk::PipelineColorBlendAttachmentState {}
-            .setColorBlendOp(blendOpToVulkan(att.color_op))
-            .setSrcColorBlendFactor(blendFactorToVulkan(att.src_color_factor))
-            .setDstColorBlendFactor(blendFactorToVulkan(att.dst_color_factor))
-            .setAlphaBlendOp(blendOpToVulkan(att.alpha_op))
-            .setSrcAlphaBlendFactor(blendFactorToVulkan(att.src_alpha_factor))
-            .setDstAlphaBlendFactor(blendFactorToVulkan(att.dst_alpha_factor))
+            .setColorBlendOp(VK_ConvertBlendOp(att.color_op))
+            .setSrcColorBlendFactor(VK_ConvertBlendFactor(att.src_color_factor))
+            .setDstColorBlendFactor(VK_ConvertBlendFactor(att.dst_color_factor))
+            .setAlphaBlendOp(VK_ConvertBlendOp(att.alpha_op))
+            .setSrcAlphaBlendFactor(VK_ConvertBlendFactor(att.src_alpha_factor))
+            .setDstAlphaBlendFactor(VK_ConvertBlendFactor(att.dst_alpha_factor))
             .setColorWriteMask(static_cast<vk::ColorComponentFlags>(att.color_write_mask)));
     }
 

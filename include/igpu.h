@@ -298,16 +298,31 @@ struct TextureDescriptor final {
     std::array<uint64_t, 4> data;
 };
 
+enum class Present : int32_t {
+    eImmediate,
+    eFifo,
+    eFifoRelaxed,
+    eMailbox,
+};
+
 struct RenderingDeviceInfo final {
     void* window = nullptr;
-    Format surface = Format::eRGBA8Unorm;
+    uint32_t width;
+    uint32_t height;
+    Format format = Format::eRGBA8Unorm;
+    Present present = Present::eImmediate;
     bool validation = false;
 };
 
 class RenderingDevice final {
-    struct RenderingDevice_T* m_impl = nullptr;
+    RenderingDeviceInfo m_info;
 
-    explicit RenderingDevice(RenderingDevice_T* impl) : m_impl(impl) {}
+    RenderingDevice_T* m_impl = nullptr;
+
+    explicit RenderingDevice(const RenderingDeviceInfo& info,
+                             RenderingDevice_T* impl) 
+        : m_info(info)
+        , m_impl(impl) {}
 
 public:
     [[nodiscard]]
@@ -321,11 +336,18 @@ public:
     RenderingDevice(RenderingDevice&&) noexcept = delete;
     void operator=(RenderingDevice&&) noexcept = delete;
 
+    /// Returns the creation info used for this rendering device.
+    const RenderingDeviceInfo& info() const { return m_info; }
+
     GpuAddr malloc(uint64_t size, MemoryType type = MemoryType::eDefault);
     void free(GpuAddr addr);
-    
+
     void* deviceToHostAddress(GpuAddr addr);
     GpuAddr hostToDeviceAddress(void* ptr);
+
+    Texture acquireSwapchainTexture();
+    void present(QueueType queue);
+    void resizeSwapchain(uint32_t width, uint32_t height);
 
     Texture createTexture(const TextureInfo& info, GpuAddr addr);    
     void freeTexture(Texture texture);
@@ -355,10 +377,6 @@ public:
         const RasterInfo& info);
 
     void freePipeline(Pipeline pipeline);
-
-    Texture getSwapchainTexture(Semaphore acquire);
-    void present(QueueType queue, Semaphore present);
-    void resizeSwapchain(uint32_t width, uint32_t height);
 
     void copy(CommandList cmd, GpuAddr src, GpuAddr dst, uint32_t size);
     void copyToTexture(void* src, Texture dst, const TextureRegion& region);
