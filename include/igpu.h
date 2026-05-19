@@ -84,6 +84,13 @@ enum class Stage : int32_t {
     eFragment,
 };
 
+enum class Shader : int32_t {
+    eVertex,
+    eFragment,
+    eCompute,
+    eCount,
+};
+
 enum class Format : int32_t {
     eUndefined,
     eRGBA8Unorm,

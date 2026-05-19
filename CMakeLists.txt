@@ -11,7 +11,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
 IF (WIN32)
     set(CMAKE_PREFIX_PATH "C:/Program Files (x86)/GLFW;${CMAKE_PREFIX_PATH}")
-ENDIF ()
+ENDIF()
 
 # Make dependent on a build time flag...
 find_package(glfw3 REQUIRED)
@@ -29,8 +29,8 @@ target_include_directories(igpu
 target_compile_options(igpu
     PRIVATE
         -g
-        -D IGPU_VULKAN
-        -D IGPU_GLFW
+        -DIGPU_VULKAN
+        -DIGPU_GLFW
 )
 
 target_link_libraries(igpu
