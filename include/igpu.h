@@ -15,7 +15,7 @@
 
 namespace gpu {
 
-using GpuAddr = uint64_t;
+using ptr = uint64_t;
 
 using CommandList = uint64_t;
 using Pipeline = uint64_t;
@@ -346,17 +346,17 @@ public:
     /// Returns the creation info used for this rendering device.
     const RenderingDeviceInfo& info() const { return m_info; }
 
-    GpuAddr malloc(uint64_t size, MemoryType type = MemoryType::eDefault);
-    void free(GpuAddr addr);
+    ptr malloc(uint64_t size, MemoryType type = MemoryType::eDefault);
+    void free(ptr p);
 
-    void* deviceToHostAddress(GpuAddr addr);
-    GpuAddr hostToDeviceAddress(void* ptr);
+    void* deviceToHostAddress(ptr p);
+    ptr hostToDeviceAddress(void* p);
 
     Texture acquireSwapchainTexture();
     void present(QueueType queue);
     void resizeSwapchain(uint32_t width, uint32_t height);
 
-    Texture createTexture(const TextureInfo& info, GpuAddr addr);    
+    Texture createTexture(const TextureInfo& info);    
     void freeTexture(Texture texture);
 
     TextureDescriptor getTextureViewDescriptor(
@@ -385,21 +385,21 @@ public:
 
     void freePipeline(Pipeline pipeline);
 
-    void copy(CommandList cmd, GpuAddr src, GpuAddr dst, uint32_t size);
+    void copy(CommandList cmd, ptr src, ptr dst, uint32_t size);
     void copyToTexture(void* src, Texture dst, const TextureRegion& region);
     void copyFromTexture(Texture src, void* dst, const TextureRegion& region);
 
     void barrier(CommandList cmd, Stage before, Stage after);
 
     /*
-    void signalAfter(CommandList cmd, Stage stage, GpuAddr addr, uint64_t value);
-    void waitBefore(CommandList cmd, Stage stage, GpuAddr addr, uint64_t value, CompareOp op);
+    void signalAfter(CommandList cmd, Stage stage, ptr addr, uint64_t value);
+    void waitBefore(CommandList cmd, Stage stage, ptr addr, uint64_t value, CompareOp op);
     */
 
     void beginRendering(CommandList cmd, const RenderingInfo& info);
     void endRendering(CommandList cmd);
 
-    void setActiveTextureHeapAddress(CommandList cmd, GpuAddr addr);
+    void setActiveTextureHeapAddress(CommandList cmd, ptr addr);
     
     void setPipeline(CommandList cmd, Pipeline pipeline);
     void setViewport(CommandList cmd, Viewport viewport);
@@ -411,19 +411,19 @@ public:
 
     void drawInstanced(
         CommandList cmd,
-        GpuAddr vertex, 
-        GpuAddr fragment, 
+        ptr vertex, 
+        ptr fragment, 
         uint32_t vertices, 
         uint32_t instances);
     void drawIndexedInstanced(
         CommandList cmd,
-        GpuAddr vertex,
-        GpuAddr fragment,
-        GpuAddr index,
+        ptr vertex,
+        ptr fragment,
+        ptr index,
         uint32_t indices,
         uint32_t instances);
 
-    void dispatch(CommandList cmd, GpuAddr data, uint32_t x, uint32_t y, uint32_t z);
+    void dispatch(CommandList cmd, ptr data, uint32_t x, uint32_t y, uint32_t z);
 };
 
 } // namespace gpu

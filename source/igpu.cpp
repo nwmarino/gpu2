@@ -130,7 +130,7 @@ enum class PipelineType : int32_t {
 
 struct AllocationInfo final {
     MemoryType type;
-    GpuAddr device;
+    ptr device;
     void* host;
 
 #ifdef IGPU_VULKAN
@@ -194,6 +194,13 @@ struct CommandList_T final {
 
 struct RenderingDevice_T final {
 #ifdef IGPU_VULKAN
+    struct Bindless final {
+        vk::Buffer buffer = nullptr;
+        VmaAllocation alloc = nullptr;
+        ptr device = 0;
+        void* host = nullptr;
+    };
+
     vk::Instance instance = nullptr;
     vk::DebugUtilsMessengerEXT messenger = nullptr;
     vk::SurfaceKHR surface = nullptr;
@@ -213,9 +220,9 @@ struct RenderingDevice_T final {
     uint32_t num_storage_images = 0;
     uint32_t num_samplers = 0;
 
+    Bindless bindless = {};
+
     vk::DescriptorSetLayout descriptor_layout = nullptr;
-    vk::DescriptorPool descriptor_pool = nullptr;
-    vk::DescriptorSet descriptor_set = nullptr;
 
     vk::PipelineLayout pipeline_layout = nullptr;
 #endif // IGPU_VULKAN
@@ -223,8 +230,8 @@ struct RenderingDevice_T final {
     // Backend-agnostic fields.
     std::mutex memory_mutex;
     std::vector<Queue_T> queues = {};
-    std::unordered_map<GpuAddr, AllocationInfo> allocations = {};
-    std::unordered_map<void*, GpuAddr> addresses = {};
+    std::unordered_map<ptr, AllocationInfo> allocations = {};
+    std::unordered_map<void*, ptr> addresses = {};
 
     Pool<CommandList_T> lists = {};
     Pool<Texture_T> textures = {};
@@ -899,9 +906,9 @@ RenderingDevice* RenderingDevice::Create(const RenderingDeviceInfo& info) {
     }
 
     {
-        vk::PhysicalDeviceDescriptorBufferPropertiesEXT desc_props;
-        auto props = vk::PhysicalDeviceProperties2 {};
-        props.pNext = &desc_props;
+        vk::PhysicalDeviceDescriptorBufferPropertiesEXT dbuffer_props = {};
+        vk::PhysicalDeviceProperties2 props = {};
+        props.pNext = &dbuffer_props;
 
         impl->physical_device.getProperties2(&props);
 
@@ -929,11 +936,58 @@ RenderingDevice* RenderingDevice::Create(const RenderingDeviceInfo& info) {
                 .setStageFlags(vk::ShaderStageFlagBits::eAll),
         };
 
-        vk::DescriptorBindingFlags flags;
-        
+        std::array<vk::DescriptorBindingFlags, 3> flags = {
+            vk::DescriptorBindingFlagBits::ePartiallyBound,
+            vk::DescriptorBindingFlagBits::ePartiallyBound,
+            vk::DescriptorBindingFlagBits::ePartiallyBound,
+        };
+
+        auto flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {}
+            .setBindingCount(flags.size())
+            .setPBindingFlags(flags.data());
+
+        auto layout_info = vk::DescriptorSetLayoutCreateInfo {}
+            .setBindingCount(bindings.size())
+            .setPBindings(bindings.data())
+            .setPNext(&flags_info);
+
+        VK_CHECK(impl->device.createDescriptorSetLayout(
+            &layout_info, 
+            nullptr, 
+            &impl->descriptor_layout));
+
+        const auto align = [](uint64_t size, uint64_t align) -> uint64_t {
+            return (size + align - 1) & ~(align - 1);
+        };
+
+        vk::DeviceSize layout_size = 0;
+        impl->device.getDescriptorSetLayoutSizeEXT(impl->descriptor_layout, &layout_size);
+
+        vk::DeviceSize dbuffer_size = align(layout_size, 
+                                            dbuffer_props.descriptorBufferOffsetAlignment);
+
+        auto dbuffer_info = vk::BufferCreateInfo {}
+            .setSize(dbuffer_size)
+            .setUsage(vk::BufferUsageFlagBits::eResourceDescriptorBufferEXT 
+                    | vk::BufferUsageFlagBits::eShaderDeviceAddress);
+
+        VmaAllocationCreateInfo vma_info = {};
+        vma_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        vma_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+
+        VmaAllocationInfo alloc_info = {};
+        VK_CHECK(vk::Result(vmaCreateBuffer(
+            impl->vma, 
+            reinterpret_cast<VkBufferCreateInfo*>(&dbuffer_info), 
+            &vma_info, 
+            reinterpret_cast<VkBuffer*>(&impl->bindless.buffer), 
+            &impl->bindless.alloc, 
+            &alloc_info)));
+
+        impl->bindless.host = alloc_info.pMappedData;
+        impl->bindless.device = impl->device.getBufferAddress(vk::BufferDeviceAddressInfo {}
+            .setBuffer(impl->bindless.buffer));
     }
-    
-    // @Todo: Create global descriptor layout.
 
     {
         std::vector<vk::PushConstantRange> ranges = {};
@@ -980,10 +1034,10 @@ RenderingDevice::~RenderingDevice() {
     m_impl = nullptr;
 }
 
-GpuAddr RenderingDevice::malloc(uint64_t size, MemoryType type) {
+ptr RenderingDevice::malloc(uint64_t size, MemoryType type) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
-    GpuAddr addr = 0;
+    ptr addr = 0;
 
     AllocationInfo alloc = {};
     alloc.type = type;
@@ -1056,13 +1110,13 @@ GpuAddr RenderingDevice::malloc(uint64_t size, MemoryType type) {
     addr_info.buffer = alloc.buffer;
 
     // Get the device address for the new memory buffer.
-    addr = static_cast<GpuAddr>(m_impl->device.getBufferAddress(&addr_info));
+    addr = static_cast<ptr>(m_impl->device.getBufferAddress(&addr_info));
     if (!addr) {
         vmaDestroyBuffer(m_impl->vma, alloc.buffer, alloc.alloc);
         return 0;
     }
 
-    alloc.device = static_cast<GpuAddr>(addr);
+    alloc.device = static_cast<ptr>(addr);
 
     // If the memory is not device only, then register the host address.
     if (type != MemoryType::eDevice) {
@@ -1078,11 +1132,11 @@ GpuAddr RenderingDevice::malloc(uint64_t size, MemoryType type) {
     return addr;
 }
 
-void RenderingDevice::free(GpuAddr addr) {
+void RenderingDevice::free(ptr p) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     // Look for the address in the device allocation table.
-    auto it = m_impl->allocations.find(addr);
+    auto it = m_impl->allocations.find(p);
     if (it == m_impl->allocations.end())
         return;
 
@@ -1098,22 +1152,22 @@ void RenderingDevice::free(GpuAddr addr) {
     m_impl->allocations.erase(it);
 }
 
-void* RenderingDevice::deviceToHostAddress(GpuAddr addr) {
+void* RenderingDevice::deviceToHostAddress(ptr p) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     // Look for the device address in the allocation table.
-    auto it = m_impl->allocations.find(addr);
+    auto it = m_impl->allocations.find(p);
     if (it != m_impl->allocations.end())
         return it->second.host;
 
     return nullptr;
 }
 
-GpuAddr RenderingDevice::hostToDeviceAddress(void* ptr) {
+ptr RenderingDevice::hostToDeviceAddress(void* p) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     // Look for the host address in the address translation table.
-    auto it = m_impl->addresses.find(ptr);
+    auto it = m_impl->addresses.find(p);
     if (it != m_impl->addresses.end())
         return it->second;
     
@@ -1246,7 +1300,7 @@ void RenderingDevice::resizeSwapchain(uint32_t width, uint32_t height) {
 #endif // IGPU_VULKAN
 }
 
-Texture RenderingDevice::createTexture(const TextureInfo& info, GpuAddr addr) {
+Texture RenderingDevice::createTexture(const TextureInfo& info) {
     Texture_T texture = {};
     texture.info = info;
 
@@ -1633,7 +1687,7 @@ void RenderingDevice::freePipeline(Pipeline pipeline) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::copy(CommandList cmd, GpuAddr src, GpuAddr dst, uint32_t size) {
+void RenderingDevice::copy(CommandList cmd, ptr src, ptr dst, uint32_t size) {
     CommandList_T i_cmd = m_impl->lists.get(cmd);
 
     IGPU_ASSERT(m_impl->allocations.contains(src), 
@@ -1661,9 +1715,9 @@ void RenderingDevice::copy(CommandList cmd, GpuAddr src, GpuAddr dst, uint32_t s
 }
 
 void RenderingDevice::copyToTexture(void* src, Texture dst, const TextureRegion& region) {
-    Texture_T i_texture = m_impl->textures.get(dst);
+    Texture_T texture_ = m_impl->textures.get(dst);
 
-    const TextureInfo& info = i_texture.info;
+    const TextureInfo& info = texture_.info;
 
 #ifdef IGPU_VULKAN
 
@@ -1681,7 +1735,7 @@ void RenderingDevice::copyToTexture(void* src, Texture dst, const TextureRegion&
 
     // @Todo: Return custom result value.
     (void) m_impl->device.copyMemoryToImage(vk::CopyMemoryToImageInfo {}
-        .setDstImage(i_texture.image)
+        .setDstImage(texture_.image)
         .setDstImageLayout(vk::ImageLayout::eGeneral)
         .setRegionCount(1)
         .setPRegions(&copy));
@@ -1719,7 +1773,7 @@ void RenderingDevice::copyFromTexture(Texture src, void* dst, const TextureRegio
 }
 
 void RenderingDevice::barrier(CommandList cmd, Stage before, Stage after) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
@@ -1727,9 +1781,10 @@ void RenderingDevice::barrier(CommandList cmd, Stage before, Stage after) {
         .setSrcStageMask(VK_ConvertPipelineStage(before))
         .setDstStageMask(VK_ConvertPipelineStage(after))
         .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite)
-        .setDstAccessMask(vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead);
+        .setDstAccessMask(vk::AccessFlagBits2::eMemoryWrite 
+                        | vk::AccessFlagBits2::eMemoryRead);
 
-    i_cmd.buffer.pipelineBarrier2(vk::DependencyInfo {}
+    cmd_.buffer.pipelineBarrier2(vk::DependencyInfo {}
         .setMemoryBarrierCount(1)
         .setPMemoryBarriers(&barrier));
 
@@ -1821,28 +1876,27 @@ void RenderingDevice::beginRendering(CommandList cmd,
 }
 
 void RenderingDevice::endRendering(CommandList cmd) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
     
-    i_cmd.buffer.endRendering();
+    cmd_.buffer.endRendering();
 
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setActiveTextureHeapAddress(CommandList cmd, 
-                                                  GpuAddr addr) {
+void RenderingDevice::setActiveTextureHeapAddress(CommandList cmd, ptr addr) {
     // @Todo: Implement this.
 }
 
 void RenderingDevice::setPipeline(CommandList cmd, Pipeline pipeline) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
-    Pipeline_T& i_pipeline = m_impl->pipelines.get(pipeline);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
+    Pipeline_T pipeline_ = m_impl->pipelines.get(pipeline);
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.bindPipeline(VK_PipelineTypeToBindPoint(i_pipeline.type), 
-                              i_pipeline.pipeline);
+    cmd_.buffer.bindPipeline(VK_PipelineTypeToBindPoint(pipeline_.type), 
+                             pipeline_.pipeline);
 
 #endif // IGPU_VULKAN
 }
@@ -1919,8 +1973,8 @@ void RenderingDevice::setEnableDepthWrite(CommandList cmd, bool value) {
 }
 
 void RenderingDevice::drawInstanced(CommandList cmd,
-                                    GpuAddr vertex, 
-                                    GpuAddr fragment, 
+                                    ptr vertex, 
+                                    ptr fragment, 
                                     uint32_t vertices, 
                                     uint32_t instances) {
     CommandList_T i_cmd = m_impl->lists.get(cmd);
@@ -1935,9 +1989,9 @@ void RenderingDevice::drawInstanced(CommandList cmd,
 }
 
 void RenderingDevice::drawIndexedInstanced(CommandList cmd,
-                                           GpuAddr vertex,
-                                           GpuAddr fragment,
-                                           GpuAddr index,
+                                           ptr vertex,
+                                           ptr fragment,
+                                           ptr index,
                                            uint32_t indices,
                                            uint32_t instances) {
     CommandList_T i_cmd = m_impl->lists.get(cmd);
@@ -1957,7 +2011,7 @@ void RenderingDevice::drawIndexedInstanced(CommandList cmd,
 }
 
 void RenderingDevice::dispatch(CommandList cmd, 
-                               GpuAddr data, 
+                               ptr data, 
                                uint32_t x, 
                                uint32_t y, 
                                uint32_t z) {
