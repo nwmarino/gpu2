@@ -123,123 +123,6 @@ public:
     }
 };
 
-enum class PipelineType : int32_t {
-    eGraphics,
-    eCompute,
-};
-
-struct AllocationInfo final {
-    MemoryType type;
-    ptr device;
-    void* host;
-
-#ifdef IGPU_VULKAN
-    vk::Buffer buffer;
-    VmaAllocation alloc;
-#endif // IGPU_VULKAN
-};
-
-struct Texture_T final {
-    TextureInfo info;
-
-    /// If this texture is borrowed e.g. from a swapchain.
-    bool borrowed;
-
-#ifdef IGPU_VULKAN
-    vk::Image image;
-    VmaAllocation alloc;
-#endif // IGPU_VULKAN
-
-    std::vector<TextureView> views;
-};
-
-struct TextureView_T final {
-    Texture texture;
-    TextureViewInfo info;
-
-#ifdef IGPU_VULKAN
-    vk::ImageView view;
-#endif // IGPU_VULKAN
-};
-
-struct Queue_T final {
-    QueueType type;
-
-#ifdef IGPU_VULKAN
-    vk::Queue queue;
-    uint32_t family;
-#endif // IGPU_VULKAN
-};
-
-struct Semaphore_T final {
-#ifdef IGPU_VULKAN
-    vk::Semaphore sema;
-#endif // IGPU_VULKAN
-};
-
-struct Pipeline_T final {
-    PipelineType type;
-
-#ifdef IGPU_VULKAN
-    vk::Pipeline pipeline;
-#endif // IGPU_VULKAN
-};
-
-struct CommandList_T final {
-#ifdef IGPU_VULKAN
-    vk::CommandPool pool;
-    vk::CommandBuffer buffer;
-#endif // IGPU_VULKAN
-};
-
-struct RenderingDevice_T final {
-#ifdef IGPU_VULKAN
-    struct Bindless final {
-        vk::Buffer buffer = nullptr;
-        VmaAllocation alloc = nullptr;
-        ptr device = 0;
-        void* host = nullptr;
-    };
-
-    vk::Instance instance = nullptr;
-    vk::DebugUtilsMessengerEXT messenger = nullptr;
-    vk::SurfaceKHR surface = nullptr;
-
-    vk::PhysicalDevice physical_device = nullptr;
-    vk::Device device = nullptr;
-
-    VmaAllocator vma = nullptr;
-
-    vk::SwapchainKHR swapchain = nullptr;
-    std::vector<Texture> swapchain_textures = {};
-    std::vector<vk::Semaphore> swapchain_acquires = {};
-    std::vector<vk::Semaphore> swapchain_presents = {};
-    uint32_t swapchain_index = 0;
-
-    uint32_t num_sampled_images = 0;
-    uint32_t num_storage_images = 0;
-    uint32_t num_samplers = 0;
-
-    Bindless bindless = {};
-
-    vk::DescriptorSetLayout descriptor_layout = nullptr;
-
-    vk::PipelineLayout pipeline_layout = nullptr;
-#endif // IGPU_VULKAN
-
-    // Backend-agnostic fields.
-    std::mutex memory_mutex;
-    std::vector<Queue_T> queues = {};
-    std::unordered_map<ptr, AllocationInfo> allocations = {};
-    std::unordered_map<void*, ptr> addresses = {};
-
-    Pool<CommandList_T> lists = {};
-    Pool<Texture_T> textures = {};
-    Pool<TextureView_T> views = {};
-    Pool<Semaphore_T> semaphores = {};
-    Pool<Pipeline_T> pipelines = {};
-};
-
 #ifdef IGPU_VULKAN
 
 struct QueueFamilyIndices final {
@@ -553,6 +436,580 @@ static QueueFamilyIndices computeIndices(vk::PhysicalDevice dev) {
     return indices;
 }
 
+static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugMessengerCallback(
+        vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+        vk::DebugUtilsMessageTypeFlagsEXT type,
+        const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+        void* pUserData) {
+    // @Todo: Let user provide their own callback. 
+    std::cerr << std::format("(Vulkan) {}", pCallbackData->pMessage);
+    return vk::False;
+}
+
+#endif // IGPU_VULKAN
+
+struct AllocationInfo final {
+    MemoryType type;
+    ptr device;
+    void* host;
+
+#ifdef IGPU_VULKAN
+    vk::Buffer buffer;
+    VmaAllocation alloc;
+#endif // IGPU_VULKAN
+};
+
+struct Texture_T final {
+    TextureInfo info;
+
+    /// If this texture is borrowed e.g. from a swapchain.
+    bool borrowed;
+
+#ifdef IGPU_VULKAN
+    vk::Image image;
+    VmaAllocation alloc;
+#endif // IGPU_VULKAN
+
+    std::vector<TextureView> views;
+};
+
+struct TextureView_T final {
+    Texture texture;
+    TextureViewInfo info;
+
+#ifdef IGPU_VULKAN
+    vk::ImageView view;
+#endif // IGPU_VULKAN
+};
+
+struct Queue_T final {
+    QueueType type;
+
+#ifdef IGPU_VULKAN
+    vk::Queue queue;
+    uint32_t family;
+#endif // IGPU_VULKAN
+};
+
+struct Semaphore_T final {
+#ifdef IGPU_VULKAN
+    vk::Semaphore sema;
+#endif // IGPU_VULKAN
+};
+
+struct Pipeline_T final {
+    PipelineType type;
+
+#ifdef IGPU_VULKAN
+    vk::Pipeline pipeline;
+#endif // IGPU_VULKAN
+};
+
+struct CommandList_T final {
+#ifdef IGPU_VULKAN
+    vk::CommandPool pool;
+    vk::CommandBuffer buffer;
+#endif // IGPU_VULKAN
+};
+
+struct RenderingDevice_T final {
+#ifdef IGPU_VULKAN
+    struct Swapchain final {
+        vk::SwapchainKHR handle = nullptr;
+        std::vector<Texture> textures = {};
+        std::vector<vk::Semaphore> acquires = {};
+        std::vector<vk::Semaphore> presents = {};
+        uint32_t index = 0;
+    };
+
+    struct DescriptorBuffer final {
+        vk::Buffer buffer = nullptr;
+        VmaAllocation alloc = nullptr;
+        ptr device = 0;
+        void* host = nullptr;
+    };
+
+    vk::Instance instance = nullptr;
+    vk::DebugUtilsMessengerEXT messenger = nullptr;
+    vk::SurfaceKHR surface = nullptr;
+
+    vk::PhysicalDevice physical_device = nullptr;
+    vk::Device device = nullptr;
+
+    VmaAllocator vma = nullptr;
+
+    Swapchain swapchain = {};
+
+    uint32_t num_sampled_images = 0;
+    uint32_t num_storage_images = 0;
+    uint32_t num_samplers = 0;
+
+    DescriptorBuffer dbuffer = {};
+
+    vk::DescriptorSetLayout descriptor_layout = nullptr;
+
+    vk::PipelineLayout pipeline_layout = nullptr;
+#endif // IGPU_VULKAN
+
+    // Backend-agnostic fields.
+    std::mutex memory_mutex;
+    std::vector<Queue_T> queues = {};
+    std::unordered_map<ptr, AllocationInfo> allocations = {};
+    std::unordered_map<void*, ptr> addresses = {};
+
+    Pool<CommandList_T> lists = {};
+    Pool<Texture_T> textures = {};
+    Pool<TextureView_T> views = {};
+    Pool<Semaphore_T> semaphores = {};
+    Pool<Pipeline_T> pipelines = {};
+
+#ifdef IGPU_VULKAN
+    void VK_CreateCore(const RenderingDeviceInfo& info) {
+        std::vector<const char*> layers = {};
+        std::vector<const char*> extensions = { 
+            VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME 
+        };
+
+        if (info.validation) {
+            layers.push_back("VK_LAYER_KHRONOS_validation");
+            extensions.push_back("VK_EXT_debug_utils");
+        }
+
+        auto app_info = vk::ApplicationInfo {}
+            .setPApplicationName("App")
+            .setPEngineName("IGPU")
+            .setApiVersion(vk::ApiVersion13)
+            .setApplicationVersion(vk::makeVersion(1, 0, 0))
+            .setEngineVersion(vk::makeVersion(1, 0, 0));
+
+        auto instance_info = vk::InstanceCreateInfo {}
+            .setPApplicationInfo(&app_info);
+
+    #ifdef IGPU_GLFW
+
+        // Fetch any VK extensions required by GLFW.
+        uint32_t num_exts = 0;
+        const char** exts = glfwGetRequiredInstanceExtensions(&num_exts);
+        for (uint32_t i = 0; i < num_exts; ++i)
+            extensions.push_back(exts[i]);
+
+    #endif // IGPU_GLFW
+
+        auto msger_info = vk::DebugUtilsMessengerCreateInfoEXT {};
+
+        // If VK validation layers were requested, then setup the debug 
+        // messenger as well. 
+        if (info.validation) {
+            msger_info.setPfnUserCallback(DebugMessengerCallback);
+            msger_info.setMessageSeverity(
+                vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose 
+                | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo 
+                | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning 
+                | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
+            msger_info.setMessageType(
+                vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral 
+                | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation 
+                | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
+
+            instance_info.setPNext(&msger_info);
+        }
+
+        instance_info.setEnabledExtensionCount(extensions.size());
+        instance_info.setPpEnabledExtensionNames(extensions.data());
+
+        instance_info.setEnabledLayerCount(layers.size());
+        instance_info.setPpEnabledLayerNames(layers.data());
+
+        VK_CHECK(vk::createInstance(&instance_info, nullptr, &instance));
+
+        // If validation layers were requested, then actually create the 
+        // debug messenger now since the instance exists.
+        if (info.validation) {
+            auto creator = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+                vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+
+            IGPU_ASSERT(creator, 
+                        "Failed to resolve 'vkCreateDebugUtilsMessengerEXT'!");
+
+            creator(
+                instance, 
+                reinterpret_cast<VkDebugUtilsMessengerCreateInfoEXT*>(&msger_info), 
+                nullptr,
+                reinterpret_cast<VkDebugUtilsMessengerEXT*>(&messenger));
+        }
+
+    #ifdef IGPU_GLFW
+
+        IGPU_ASSERT(info.window, "Window handle cannot be null!");
+
+        // If GLFW is supported, then we assume the info window belongs to
+        // the library and create the VK surface accordingly.
+        VK_CHECK(vk::Result(glfwCreateWindowSurface(
+            instance, 
+            reinterpret_cast<GLFWwindow*>(info.window), 
+            nullptr, 
+            reinterpret_cast<VkSurfaceKHR*>(&surface))));
+
+    #endif // IGPU_GLFW
+    }
+
+    void VK_CreateDevice(const RenderingDeviceInfo& info) {
+        std::vector<const char*> extensions = {};
+
+        std::vector<vk::PhysicalDevice> devices = 
+            instance.enumeratePhysicalDevices().value;
+
+        // @Todo: Replace with logging callback.
+        IGPU_ASSERT(!devices.empty(), "No physical devices were found!");
+
+        auto it = std::ranges::find_if(devices, [&](vk::PhysicalDevice dev) -> bool {
+            std::set<std::string> required(extensions.begin(), extensions.end());
+            std::vector<vk::ExtensionProperties> available = 
+                dev.enumerateDeviceExtensionProperties().value;
+
+            // Determine which of the required extensions are available from 
+            // this device.
+            for (const vk::ExtensionProperties& ext : available)
+                required.erase(ext.extensionName);
+
+            // One or more required extensions is not present; skip.
+            if (!required.empty())
+                return false;
+
+            // Devices must support VK 1.3.
+            if (dev.getProperties().apiVersion < vk::ApiVersion13)
+                return false;
+
+            // Devices must support queues for graphics, compute, and transfer
+            // work.
+            if (!computeIndices(dev).complete())
+                return false;
+
+            return true;
+        });
+
+        // @Todo: Replace with error callback.
+        IGPU_ASSERT(it != devices.end(), "Failed to find a suitable GPU.");
+
+        // Physical device chosen!
+        physical_device = *it;
+
+        QueueFamilyIndices indices = computeIndices(physical_device);
+        IGPU_ASSERT(indices.complete(), "GPU queue families are incomplete!");
+
+        float priority = 1.f;
+        std::vector<vk::DeviceQueueCreateInfo> queue_infos = {
+            vk::DeviceQueueCreateInfo {}
+                .setQueueCount(1)
+                .setQueueFamilyIndex(indices.graphics)
+                .setPQueuePriorities(&priority),
+            vk::DeviceQueueCreateInfo {}
+                .setQueueCount(1)
+                .setQueueFamilyIndex(indices.compute)
+                .setPQueuePriorities(&priority),
+            vk::DeviceQueueCreateInfo {}
+                .setQueueCount(1)
+                .setQueueFamilyIndex(indices.transfer)
+                .setPQueuePriorities(&priority),
+        };
+
+        auto feats = vk::PhysicalDeviceFeatures {}
+            .setDepthClamp(vk::True)
+            .setDepthBiasClamp(vk::True)
+            .setSamplerAnisotropy(vk::True);
+            
+        auto feats11 = vk::PhysicalDeviceVulkan11Features {}
+            .setShaderDrawParameters(vk::True);
+
+        auto feats12 = vk::PhysicalDeviceVulkan12Features {}
+            .setBufferDeviceAddress(vk::True)
+            .setDescriptorIndexing(vk::True)
+            .setDescriptorBindingPartiallyBound(vk::True)
+            .setShaderSampledImageArrayNonUniformIndexing(vk::True)
+            .setDescriptorBindingSampledImageUpdateAfterBind(vk::True)
+            .setRuntimeDescriptorArray(vk::True)
+            .setDescriptorBindingVariableDescriptorCount(vk::True)
+            .setTimelineSemaphore(vk::True)
+            .setPNext(&feats11);
+
+        auto feats13 = vk::PhysicalDeviceVulkan13Features {}
+            .setDynamicRendering(vk::True)
+            .setSynchronization2(vk::True)
+            .setPNext(&feats12);
+
+        auto feats2 = vk::PhysicalDeviceFeatures2 {}
+            .setFeatures(feats)
+            .setPNext(&feats13);
+
+        auto device_info = vk::DeviceCreateInfo {}
+            .setQueueCreateInfoCount(queue_infos.size())
+            .setPQueueCreateInfos(queue_infos.data())
+            .setEnabledExtensionCount(extensions.size())
+            .setPpEnabledExtensionNames(extensions.data())
+            .setPNext(&feats2);
+
+        VK_CHECK(physical_device.createDevice(&device_info, nullptr, &device));
+
+        Queue_T graphics = {};
+        graphics.type = QueueType::eGraphics;
+        graphics.queue = device.getQueue(indices.graphics, 0);
+        graphics.family = indices.graphics;
+        queues[static_cast<uint32_t>(QueueType::eGraphics)] = graphics;
+
+        Queue_T compute = {};
+        compute.type = QueueType::eCompute;
+        compute.queue = device.getQueue(indices.compute, 0);
+        compute.family = indices.compute;
+        queues[static_cast<uint32_t>(QueueType::eCompute)] = compute;
+
+        Queue_T transfer = {};
+        transfer.type = QueueType::eTransfer;
+        transfer.queue = device.getQueue(indices.transfer, 0);
+        transfer.family = indices.transfer;
+        queues[static_cast<uint32_t>(QueueType::eTransfer)] = transfer;
+    }
+
+    void VK_CreateAllocator(const RenderingDeviceInfo& info) {
+        VmaVulkanFunctions funcs = {};
+        funcs.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+        funcs.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+
+        VmaAllocatorCreateInfo vma_info = {};
+        vma_info.instance = instance;
+        vma_info.physicalDevice = physical_device;
+        vma_info.device = device;
+        vma_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        vma_info.pVulkanFunctions = &funcs;
+
+        VK_CHECK(vk::Result(vmaCreateAllocator(&vma_info, &vma)));
+    }
+
+    void VK_CreateSwapchain(const RenderingDeviceInfo& info) {
+        Swapchain& sw = swapchain;
+
+        vk::SurfaceCapabilitiesKHR caps = {};
+        VK_CHECK(physical_device.getSurfaceCapabilitiesKHR(surface, &caps));
+
+        auto swapchain_info = vk::SwapchainCreateInfoKHR {}
+            .setSurface(surface)
+            .setMinImageCount(caps.minImageCount)
+            .setImageFormat(VK_ConvertFormat(info.format))
+            .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
+            .setImageExtent({ info.width, info.height })
+            .setImageArrayLayers(1)
+            .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
+            .setPreTransform(caps.currentTransform)
+            .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
+            .setClipped(vk::True)
+            .setPresentMode(VK_ConvertPresent(info.present));
+
+        VK_CHECK(device.createSwapchainKHR(
+            &swapchain_info, 
+            nullptr, 
+            &swapchain.handle));
+
+        // Fetch the number of swapchain images in use.
+        uint32_t num_images = 0;
+        VK_CHECK(device.getSwapchainImagesKHR(
+            swapchain.handle, 
+            &num_images, 
+            nullptr));
+
+        // Fetch the actual swapchain image handles.
+        std::vector<vk::Image> images(num_images);
+        VK_CHECK(device.getSwapchainImagesKHR(
+            swapchain.handle, 
+            &num_images, 
+            images.data()));
+
+        sw.textures.resize(num_images);
+        sw.acquires.resize(num_images);
+        sw.presents.resize(num_images);
+
+        auto sema_info = vk::SemaphoreCreateInfo {};
+
+        for (std::size_t i = 0; i < num_images; ++i) {
+            vk::Image image = images[i];
+
+            Texture_T texture = {};
+            texture.image = image;
+            texture.alloc = nullptr;
+            texture.views = {};
+            texture.borrowed = true;
+            texture.info = TextureInfo {
+                .type = TextureType::e2D,
+                .format = info.format,
+                .usage = Usage::eColorAttachment,
+                .dimensions = { info.width, info.height },
+            };
+
+            sw.textures[i] = textures.add(texture);
+
+            VK_CHECK(device.createSemaphore(
+                &sema_info, 
+                nullptr, 
+                &sw.acquires[i]));
+            
+            VK_CHECK(device.createSemaphore(
+                &sema_info, 
+                nullptr, 
+                &sw.presents[i]));
+        }
+    }
+
+    void VK_CreateDescriptors(const RenderingDeviceInfo& info) {
+        vk::PhysicalDeviceDescriptorBufferPropertiesEXT db_props = {};
+        vk::PhysicalDeviceProperties2 props = {};
+        props.pNext = &db_props;
+
+        physical_device.getProperties2(&props);
+
+        const vk::PhysicalDeviceLimits& limits = props.properties.limits;
+
+        num_sampled_images = limits.maxPerStageDescriptorSampledImages;
+        num_storage_images = limits.maxPerStageDescriptorStorageImages;
+        num_samplers = limits.maxPerStageDescriptorSamplers;
+
+        std::array<vk::DescriptorBindingFlags, 3> flags = {
+            vk::DescriptorBindingFlagBits::ePartiallyBound,
+            vk::DescriptorBindingFlagBits::ePartiallyBound,
+            vk::DescriptorBindingFlagBits::ePartiallyBound,
+        };
+
+        std::array<vk::DescriptorSetLayoutBinding, 3> bindings = {
+            vk::DescriptorSetLayoutBinding {}
+                .setBinding(TEXTURE_BINDING)
+                .setDescriptorType(vk::DescriptorType::eSampledImage)
+                .setDescriptorCount(num_sampled_images)
+                .setStageFlags(vk::ShaderStageFlagBits::eAll),
+            vk::DescriptorSetLayoutBinding {}
+                .setBinding(RW_TEXTURE_BINDING)
+                .setDescriptorType(vk::DescriptorType::eStorageImage)
+                .setDescriptorCount(num_storage_images)
+                .setStageFlags(vk::ShaderStageFlagBits::eAll),
+            vk::DescriptorSetLayoutBinding {}
+                .setBinding(SAMPLER_BINDING)
+                .setDescriptorType(vk::DescriptorType::eSampler)
+                .setDescriptorCount(num_samplers)
+                .setStageFlags(vk::ShaderStageFlagBits::eAll),
+        };
+
+        auto flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {}
+            .setBindingCount(flags.size())
+            .setPBindingFlags(flags.data());
+
+        auto layout_info = vk::DescriptorSetLayoutCreateInfo {}
+            .setBindingCount(bindings.size())
+            .setPBindings(bindings.data())
+            .setPNext(&flags_info);
+
+        VK_CHECK(device.createDescriptorSetLayout(
+            &layout_info, 
+            nullptr, 
+            &descriptor_layout));
+
+        const auto align = [](uint64_t size, uint64_t align) -> uint64_t {
+            return (size + align - 1) & ~(align - 1);
+        };
+
+        vk::DeviceSize layout_size = 0;
+        device.getDescriptorSetLayoutSizeEXT(descriptor_layout, &layout_size);
+
+        vk::DeviceSize db_size = align(
+            layout_size, db_props.descriptorBufferOffsetAlignment);
+
+        auto db_info = vk::BufferCreateInfo {}
+            .setSize(db_size)
+            .setUsage(vk::BufferUsageFlagBits::eResourceDescriptorBufferEXT 
+                    | vk::BufferUsageFlagBits::eShaderDeviceAddress);
+
+        VmaAllocationCreateInfo vma_info = {};
+        vma_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        vma_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+
+        VmaAllocationInfo alloc_info = {};
+        VK_CHECK(vk::Result(vmaCreateBuffer(
+            vma, 
+            reinterpret_cast<VkBufferCreateInfo*>(&db_info), 
+            &vma_info, 
+            reinterpret_cast<VkBuffer*>(&dbuffer.buffer), 
+            &dbuffer.alloc, 
+            &alloc_info)));
+
+        dbuffer.host = alloc_info.pMappedData;
+        dbuffer.device = device.getBufferAddress(vk::BufferDeviceAddressInfo {}
+            .setBuffer(dbuffer.buffer));
+    }
+
+    void VK_CreateLayout(const RenderingDeviceInfo& info) {
+        std::vector<vk::PushConstantRange> ranges = {};
+
+        for (int32_t i = 0; i < static_cast<int32_t>(Shader::eCount); ++i) {
+            ranges.push_back(vk::PushConstantRange {}
+                .setSize(sizeof(vk::DeviceAddress))
+                .setOffset(i * sizeof(vk::DeviceAddress))
+                .setStageFlags(VK_ConvertShaderStage(static_cast<Shader>(i))));
+        }
+
+        auto layout_info = vk::PipelineLayoutCreateInfo {}
+            .setPushConstantRangeCount(ranges.size())
+            .setPPushConstantRanges(ranges.data())
+            .setSetLayoutCount(1)
+            .setPSetLayouts(nullptr);
+
+        VK_CHECK(device.createPipelineLayout(
+            &layout_info, 
+            nullptr, 
+            &pipeline_layout));
+    }
+
+#endif // IGPU_VULKAN
+
+    explicit RenderingDevice_T(const RenderingDeviceInfo& info) {
+    #ifdef IGPU_VULKAN
+
+        VK_CreateCore(info);
+        VK_CreateDevice(info);
+        VK_CreateAllocator(info);
+        VK_CreateSwapchain(info);
+        VK_CreateDescriptors(info);
+        VK_CreateLayout(info);
+
+    #endif // IGPU_VULKAN
+    }
+
+    ~RenderingDevice_T() {
+    #ifdef IGPU_VULKAN
+
+        // @Todo: Implement rest of destruction.
+
+        if (pipeline_layout) {
+            device.destroyPipelineLayout(pipeline_layout);
+            pipeline_layout = nullptr;
+        }
+
+        if (dbuffer.buffer && dbuffer.alloc) {
+            vmaDestroyBuffer(vma, dbuffer.buffer, dbuffer.alloc);
+            dbuffer.buffer = nullptr;
+            dbuffer.alloc = nullptr;
+        }
+
+        if (descriptor_layout) {
+            device.destroyDescriptorSetLayout(descriptor_layout);
+            descriptor_layout = nullptr;
+        }
+
+        if (instance) {
+            instance.destroy();
+            instance = nullptr;
+        }
+
+    #endif // IGPU_VULKAN
+    }
+};
+
+#ifdef IGPU_VULKAN
+
 static vk::PipelineShaderStageCreateInfo createShaderStage(
         RenderingDevice_T& device, 
         std::string_view spirv, 
@@ -573,465 +1030,25 @@ static vk::PipelineShaderStageCreateInfo createShaderStage(
     return stage_info;
 }
 
-static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugMessengerCallback(
-        vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
-        vk::DebugUtilsMessageTypeFlagsEXT type,
-        const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
-        void* pUserData) {
-    // @Todo: Let user provide their own callback. 
-    std::cerr << std::format("(Vulkan) {}", pCallbackData->pMessage);
-    return vk::False;
-}
-
 #endif // IGPU_VULKAN
 
-//>==--------------------------------------------------------------------------
+//>==---------------------------------------------------------------------------
 //                          RenderingDevice Implementation
-//>==--------------------------------------------------------------------------
+//>==---------------------------------------------------------------------------
 
 RenderingDevice* RenderingDevice::Create(const RenderingDeviceInfo& info) {
-    RenderingDevice_T* impl = new (std::nothrow) RenderingDevice_T();
+    RenderingDevice_T* impl = new (std::nothrow) RenderingDevice_T(info);
     if (!impl)
         return nullptr;
-
-#ifdef IGPU_VULKAN
-
-    std::vector<const char*> app_extensions = { VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME };
-    std::vector<const char*> dev_extensions = {};
-    std::vector<const char*> layers = {};
-
-    if (info.validation) {
-        app_extensions.push_back("VK_EXT_debug_utils");
-        layers.push_back("VK_LAYER_KHRONOS_validation");
-    }
-
-    auto app_info = vk::ApplicationInfo {}
-        .setPApplicationName("App")
-        .setPEngineName("IGPU")
-        .setApiVersion(vk::ApiVersion14)
-        .setApplicationVersion(vk::makeVersion(1, 0, 0))
-        .setEngineVersion(vk::makeVersion(1, 0, 0));
-
-    auto instance_info = vk::InstanceCreateInfo {}
-        .setPApplicationInfo(&app_info);
-
-#ifdef IGPU_GLFW
-
-    // Fetch any VK extensions required by GLFW.
-    uint32_t num_exts;
-    const char** exts = glfwGetRequiredInstanceExtensions(&num_exts);
-    for (uint32_t i = 0; i < num_exts; ++i)
-        app_extensions.push_back(exts[i]);
-
-#endif // IGPU_GLFW
-
-    auto msger_info = vk::DebugUtilsMessengerCreateInfoEXT {};
-
-    // If VK validation layers were requested, then setup the debug 
-    // messenger as well. 
-    if (info.validation) {
-        msger_info.setPfnUserCallback(DebugMessengerCallback);
-        msger_info.setMessageSeverity(
-            vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose 
-            | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo 
-            | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning 
-            | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
-        msger_info.setMessageType(
-            vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral 
-            | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation 
-            | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
-
-        instance_info.setPNext(&msger_info);
-    }
-
-    instance_info.setEnabledExtensionCount(app_extensions.size());
-    instance_info.setPpEnabledExtensionNames(app_extensions.data());
-
-    instance_info.setEnabledLayerCount(layers.size());
-    instance_info.setPpEnabledLayerNames(layers.data());
-
-    VK_CHECK(vk::createInstance(&instance_info, nullptr, &impl->instance));
-    
-    // If validation layers were requested, then actually create the 
-    // debug messenger now since the instance exists.
-    if (info.validation) {
-        auto creator = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-            vkGetInstanceProcAddr(impl->instance, "vkCreateDebugUtilsMessengerEXT"));
-
-        if (creator) {
-            creator(
-                impl->instance, 
-                reinterpret_cast<VkDebugUtilsMessengerCreateInfoEXT*>(&msger_info), 
-                nullptr,
-                reinterpret_cast<VkDebugUtilsMessengerEXT*>(&impl->messenger));
-        }
-    }
-
-#ifdef IGPU_GLFW
-
-    IGPU_ASSERT(info.window, "Window handle cannot be null!");
-
-    // If GLFW is supported, then we assume the info window belongs to
-    // the library and create the VK surface accordingly.
-    VK_CHECK(vk::Result(glfwCreateWindowSurface(
-        impl->instance, 
-        reinterpret_cast<GLFWwindow*>(info.window), 
-        nullptr, 
-        reinterpret_cast<VkSurfaceKHR*>(&impl->surface))));
-
-#endif // IGPU_GLFW
-    
-    // Now that the instance and surface are setup, we choose a 
-    // physical device.
-
-    std::vector<vk::PhysicalDevice> devices = 
-        impl->instance.enumeratePhysicalDevices().value;
-
-    // @Todo: Replace with logging callback.
-    IGPU_ASSERT(!devices.empty(), "No physical devices were found!");
-
-    auto it = std::ranges::find_if(devices, [&](vk::PhysicalDevice dev) -> bool {
-        {
-            std::set<std::string> req(dev_extensions.begin(), dev_extensions.end());
-            std::vector<vk::ExtensionProperties> available = 
-                dev.enumerateDeviceExtensionProperties().value;
-
-            // Determine which required extensions are available from this device.
-            for (const vk::ExtensionProperties& ext : available)
-                req.erase(ext.extensionName);
-
-            // One or more required extensions is not present; skip.
-            if (!req.empty())
-                return false;
-        }
-
-        {
-            std::set<std::string> req(layers.begin(), layers.end());
-            std::vector<vk::LayerProperties> available = 
-                dev.enumerateDeviceLayerProperties().value;
-
-            // Determine which required layers are available from this device.
-            for (const vk::LayerProperties& layer : available)
-                req.erase(layer.layerName);
-
-            // One or more required layers is not present; skip.
-            if (!req.empty())
-                return false;
-        }
-
-        // Devices must support VK 1.4.
-        if (dev.getProperties().apiVersion < vk::ApiVersion14)
-            return false;
-
-        QueueFamilyIndices indices = computeIndices(dev);
-        if (!indices.complete())
-            return false;
-
-        return true;
-    });
-
-    // @Todo: Again, replace with error callback.
-    IGPU_ASSERT(it != devices.end(), "Failed to find a suitable graphics device.");
-
-    impl->physical_device = *it;
-
-    // Now that a physical device has been chosen, we create the 
-    // logical device and get the queues.
-
-    QueueFamilyIndices indices = computeIndices(impl->physical_device);
-    IGPU_ASSERT(indices.complete(), "Device queue families are incomplete!");
-
-    float priority = 1.0f;
-    std::vector<vk::DeviceQueueCreateInfo> queue_infos = {
-        vk::DeviceQueueCreateInfo {}
-            .setQueueCount(1)
-            .setQueueFamilyIndex(indices.graphics)
-            .setPQueuePriorities(&priority),
-        vk::DeviceQueueCreateInfo {}
-            .setQueueCount(1)
-            .setQueueFamilyIndex(indices.compute)
-            .setPQueuePriorities(&priority),
-        vk::DeviceQueueCreateInfo {}
-            .setQueueCount(1)
-            .setQueueFamilyIndex(indices.transfer)
-            .setPQueuePriorities(&priority),
-    };
-
-    // Setup the feature list for the VK device.
-
-    auto feats = vk::PhysicalDeviceFeatures {}
-        .setDepthClamp(vk::True)
-        .setDepthBiasClamp(vk::True)
-        .setSamplerAnisotropy(vk::True);
-        
-    auto feats11 = vk::PhysicalDeviceVulkan11Features {}
-        .setShaderDrawParameters(vk::True);
-
-    auto feats12 = vk::PhysicalDeviceVulkan12Features {}
-        .setBufferDeviceAddress(vk::True)
-        .setDescriptorIndexing(vk::True)
-        .setDescriptorBindingPartiallyBound(vk::True)
-        .setShaderSampledImageArrayNonUniformIndexing(vk::True)
-        .setDescriptorBindingSampledImageUpdateAfterBind(vk::True)
-        .setRuntimeDescriptorArray(vk::True)
-        .setDescriptorBindingVariableDescriptorCount(vk::True)
-        .setTimelineSemaphore(vk::True)
-        .setPNext(&feats11);
-
-    auto feats13 = vk::PhysicalDeviceVulkan13Features {}
-        .setDynamicRendering(vk::True)
-        .setSynchronization2(vk::True)
-        .setPNext(&feats12);
-
-    auto feats2 = vk::PhysicalDeviceFeatures2 {}
-        .setFeatures(feats)
-        .setPNext(&feats13);
-
-    auto device_info = vk::DeviceCreateInfo {}
-        .setQueueCreateInfoCount(queue_infos.size())
-        .setPQueueCreateInfos(queue_infos.data())
-        .setEnabledExtensionCount(dev_extensions.size())
-        .setPpEnabledExtensionNames(dev_extensions.data())
-        .setPNext(&feats2);
-
-    VK_CHECK(impl->physical_device.createDevice(
-        &device_info, 
-        nullptr, 
-        &impl->device));
-
-    // Fetch and create each of the required device queues.
-
-    Queue_T graphics = {};
-    graphics.type = QueueType::eGraphics;
-    graphics.queue = impl->device.getQueue(indices.graphics, 0);
-    graphics.family = indices.graphics;
-    impl->queues[static_cast<uint32_t>(QueueType::eGraphics)] = graphics;
-
-    Queue_T compute = {};
-    compute.type = QueueType::eCompute;
-    compute.queue = impl->device.getQueue(indices.compute, 0);
-    compute.family = indices.compute;
-    impl->queues[static_cast<uint32_t>(QueueType::eCompute)] = compute;
-
-    Queue_T transfer = {};
-    transfer.type = QueueType::eTransfer;
-    transfer.queue = impl->device.getQueue(indices.transfer, 0);
-    transfer.family = indices.transfer;
-    impl->queues[static_cast<uint32_t>(QueueType::eTransfer)] = transfer;
-
-    // Create the VMA (Vulkan Memory Allocator).
-
-    VmaVulkanFunctions funcs = {};
-    funcs.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-    funcs.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
-
-    VmaAllocatorCreateInfo vma_info = {};
-    vma_info.instance = impl->instance;
-    vma_info.physicalDevice = impl->physical_device;
-    vma_info.device = impl->device;
-    vma_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-    vma_info.pVulkanFunctions = &funcs;
-
-    VK_CHECK(vk::Result(vmaCreateAllocator(&vma_info, &impl->vma)));
-
-    // Create the primary swapchain.
-
-    vk::SurfaceCapabilitiesKHR caps;
-    VK_CHECK(impl->physical_device.getSurfaceCapabilitiesKHR(impl->surface, &caps));
-
-    auto swapchain_info = vk::SwapchainCreateInfoKHR {}
-        .setSurface(impl->surface)
-        .setMinImageCount(caps.minImageCount)
-        .setImageFormat(VK_ConvertFormat(info.format))
-        .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
-        .setImageExtent({ info.width, info.height })
-        .setImageArrayLayers(1)
-        .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
-        .setPreTransform(caps.currentTransform)
-        .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
-        .setClipped(vk::True)
-        .setPresentMode(VK_ConvertPresent(info.present));
-
-    VK_CHECK(impl->device.createSwapchainKHR(
-        &swapchain_info, 
-        nullptr, 
-        &impl->swapchain));
-
-    // Fetch the number of swapchain images in use.
-    uint32_t num_images;
-    VK_CHECK(impl->device.getSwapchainImagesKHR(
-        impl->swapchain, 
-        &num_images, 
-        nullptr));
-
-    // Fetch the actual swapchain image handles.
-    std::vector<vk::Image> images(num_images);
-    VK_CHECK(impl->device.getSwapchainImagesKHR(
-        impl->swapchain, 
-        &num_images, 
-        images.data()));
-
-    impl->swapchain_textures.resize(num_images);
-    impl->swapchain_acquires.resize(num_images);
-    impl->swapchain_presents.resize(num_images);
-
-    auto sema_info = vk::SemaphoreCreateInfo {};
-
-    for (std::size_t i = 0; i < num_images; ++i) {
-        vk::Image image = images[i];
-
-        Texture_T texture = {};
-        texture.image = image;
-        texture.alloc = nullptr;
-        texture.views = {};
-        texture.borrowed = true;
-        texture.info = TextureInfo {
-            .type = TextureType::e2D,
-            .format = info.format,
-            .usage = Usage::eColorAttachment,
-            .dimensions = { info.width, info.height },
-        };
-
-        impl->swapchain_textures[i] = impl->textures.add(texture);
-
-        VK_CHECK(impl->device.createSemaphore(
-            &sema_info, 
-            nullptr, 
-            &impl->swapchain_acquires[i]));
-        
-        VK_CHECK(impl->device.createSemaphore(
-            &sema_info, 
-            nullptr, 
-            &impl->swapchain_presents[i]));
-    }
-
-    {
-        vk::PhysicalDeviceDescriptorBufferPropertiesEXT dbuffer_props = {};
-        vk::PhysicalDeviceProperties2 props = {};
-        props.pNext = &dbuffer_props;
-
-        impl->physical_device.getProperties2(&props);
-
-        vk::PhysicalDeviceLimits limits = props.properties.limits;
-
-        impl->num_sampled_images = limits.maxPerStageDescriptorSampledImages;
-        impl->num_storage_images = limits.maxPerStageDescriptorStorageImages;
-        impl->num_samplers = limits.maxPerStageDescriptorSamplers;
-
-        std::array<vk::DescriptorSetLayoutBinding, 3> bindings = {
-            vk::DescriptorSetLayoutBinding {}
-                .setBinding(TEXTURE_BINDING)
-                .setDescriptorType(vk::DescriptorType::eSampledImage)
-                .setDescriptorCount(impl->num_sampled_images)
-                .setStageFlags(vk::ShaderStageFlagBits::eAll),
-            vk::DescriptorSetLayoutBinding {}
-                .setBinding(RW_TEXTURE_BINDING)
-                .setDescriptorType(vk::DescriptorType::eStorageImage)
-                .setDescriptorCount(impl->num_storage_images)
-                .setStageFlags(vk::ShaderStageFlagBits::eAll),
-            vk::DescriptorSetLayoutBinding {}
-                .setBinding(SAMPLER_BINDING)
-                .setDescriptorType(vk::DescriptorType::eSampler)
-                .setDescriptorCount(impl->num_samplers)
-                .setStageFlags(vk::ShaderStageFlagBits::eAll),
-        };
-
-        std::array<vk::DescriptorBindingFlags, 3> flags = {
-            vk::DescriptorBindingFlagBits::ePartiallyBound,
-            vk::DescriptorBindingFlagBits::ePartiallyBound,
-            vk::DescriptorBindingFlagBits::ePartiallyBound,
-        };
-
-        auto flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {}
-            .setBindingCount(flags.size())
-            .setPBindingFlags(flags.data());
-
-        auto layout_info = vk::DescriptorSetLayoutCreateInfo {}
-            .setBindingCount(bindings.size())
-            .setPBindings(bindings.data())
-            .setPNext(&flags_info);
-
-        VK_CHECK(impl->device.createDescriptorSetLayout(
-            &layout_info, 
-            nullptr, 
-            &impl->descriptor_layout));
-
-        const auto align = [](uint64_t size, uint64_t align) -> uint64_t {
-            return (size + align - 1) & ~(align - 1);
-        };
-
-        vk::DeviceSize layout_size = 0;
-        impl->device.getDescriptorSetLayoutSizeEXT(impl->descriptor_layout, &layout_size);
-
-        vk::DeviceSize dbuffer_size = align(layout_size, 
-                                            dbuffer_props.descriptorBufferOffsetAlignment);
-
-        auto dbuffer_info = vk::BufferCreateInfo {}
-            .setSize(dbuffer_size)
-            .setUsage(vk::BufferUsageFlagBits::eResourceDescriptorBufferEXT 
-                    | vk::BufferUsageFlagBits::eShaderDeviceAddress);
-
-        VmaAllocationCreateInfo vma_info = {};
-        vma_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        vma_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-
-        VmaAllocationInfo alloc_info = {};
-        VK_CHECK(vk::Result(vmaCreateBuffer(
-            impl->vma, 
-            reinterpret_cast<VkBufferCreateInfo*>(&dbuffer_info), 
-            &vma_info, 
-            reinterpret_cast<VkBuffer*>(&impl->bindless.buffer), 
-            &impl->bindless.alloc, 
-            &alloc_info)));
-
-        impl->bindless.host = alloc_info.pMappedData;
-        impl->bindless.device = impl->device.getBufferAddress(vk::BufferDeviceAddressInfo {}
-            .setBuffer(impl->bindless.buffer));
-    }
-
-    {
-        std::vector<vk::PushConstantRange> ranges = {};
-
-        for (int32_t i = 0; i < static_cast<int32_t>(Shader::eCount); ++i) {
-            Shader stage = static_cast<Shader>(i);
-            int32_t offset = sizeof(vk::DeviceAddress) * i;
-
-            ranges.push_back(vk::PushConstantRange {}
-                .setSize(sizeof(vk::DeviceAddress))
-                .setOffset(offset)
-                .setStageFlags(VK_ConvertShaderStage(stage)));
-        }
-
-        auto layout_info = vk::PipelineLayoutCreateInfo {}
-            .setPushConstantRangeCount(ranges.size())
-            .setPPushConstantRanges(ranges.data())
-            .setSetLayoutCount(1)
-            .setPSetLayouts(nullptr);
-
-        VK_CHECK(impl->device.createPipelineLayout(
-            &layout_info, 
-            nullptr, 
-            &impl->pipeline_layout));
-    }
-
-#endif // IGPU_VULKAN
 
     return new (std::nothrow) RenderingDevice(info, impl);
 }
 
 RenderingDevice::~RenderingDevice() {
-#ifdef IGPU_VULKAN
-
-    // @Todo: Implement rest of destruction.
-
-    if (m_impl->instance) {
-        m_impl->instance.destroy();
+    if (m_impl) {
+        delete m_impl;
+        m_impl = nullptr;
     }
-
-#endif // IGPU_VULKAN
-    
-    delete m_impl;
-    m_impl = nullptr;
 }
 
 ptr RenderingDevice::malloc(uint64_t size, MemoryType type) {
@@ -1076,7 +1093,7 @@ ptr RenderingDevice::malloc(uint64_t size, MemoryType type) {
         .setUsage(usage)
         .setSize(static_cast<vk::DeviceSize>(size))
         .setSharingMode(vk::SharingMode::eConcurrent);
-    /*
+    /* @Todo: Update these.
     buffer_info.queueFamilyIndexCount = ...;
     buffer_info.pQueueFamilyIndices = ...;
     */
@@ -1116,7 +1133,7 @@ ptr RenderingDevice::malloc(uint64_t size, MemoryType type) {
         return 0;
     }
 
-    alloc.device = static_cast<ptr>(addr);
+    alloc.device = addr;
 
     // If the memory is not device only, then register the host address.
     if (type != MemoryType::eDevice) {
@@ -1177,16 +1194,18 @@ ptr RenderingDevice::hostToDeviceAddress(void* p) {
 Texture RenderingDevice::acquireSwapchainTexture() {
 #ifdef IGPU_VULKAN
 
+    RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
+
     uint32_t index;
     VK_CHECK(m_impl->device.acquireNextImageKHR(
-        m_impl->swapchain, 
+        swapchain.handle,
         UINT64_MAX, 
-        m_impl->swapchain_acquires[m_impl->swapchain_index], 
+        swapchain.acquires[swapchain.index], 
         nullptr, 
         &index));
 
-    m_impl->swapchain_index = index;
-    return m_impl->swapchain_textures[index];
+    swapchain.index = index;
+    return swapchain.textures[index];
 
 #endif // IGPU_VULKAN
 }
@@ -1194,14 +1213,16 @@ Texture RenderingDevice::acquireSwapchainTexture() {
 void RenderingDevice::present(QueueType queue) {
 #ifdef IGPU_VULKAN
 
+    RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
+
     Queue_T i_queue = m_impl->queues[static_cast<uint32_t>(queue)];
-    uint32_t index = m_impl->swapchain_index;
+    uint32_t index = swapchain.index;
 
     VK_CHECK(i_queue.queue.presentKHR(vk::PresentInfoKHR {}
         .setWaitSemaphoreCount(1)
-        .setPWaitSemaphores(&m_impl->swapchain_presents[index])
+        .setPWaitSemaphores(&swapchain.presents[index])
         .setSwapchainCount(1)
-        .setPSwapchains(&m_impl->swapchain)
+        .setPSwapchains(&swapchain.handle)
         .setPImageIndices(&index)));
 
 #endif // IGPU_VULKAN
@@ -1210,15 +1231,16 @@ void RenderingDevice::present(QueueType queue) {
 void RenderingDevice::resizeSwapchain(uint32_t width, uint32_t height) {
 #ifdef IGPU_VULKAN
 
-    vk::Device device = m_impl->device;
+    // @Todo: Shouldn't abort on failure.
+    VK_CHECK(m_impl->device.waitIdle());
 
-    VK_CHECK(device.waitIdle());
-
-    vk::SurfaceCapabilitiesKHR caps;
+    vk::SurfaceCapabilitiesKHR caps = {};
     VK_CHECK(m_impl->physical_device.getSurfaceCapabilitiesKHR(
-        m_impl->surface, &caps));
+        m_impl->surface, 
+        &caps));
 
-    vk::SwapchainKHR old_swapchain = m_impl->swapchain;
+    RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
+    vk::SwapchainKHR old_swapchain = swapchain.handle;
 
     auto info = vk::SwapchainCreateInfoKHR {}
         .setSurface(m_impl->surface)
@@ -1234,38 +1256,42 @@ void RenderingDevice::resizeSwapchain(uint32_t width, uint32_t height) {
         .setPresentMode(VK_ConvertPresent(m_info.present))
         .setOldSwapchain(old_swapchain);
 
-    VK_CHECK(device.createSwapchainKHR(&info, nullptr, &m_impl->swapchain));
-    device.destroySwapchainKHR(old_swapchain);
+    VK_CHECK(m_impl->device.createSwapchainKHR(
+        &info, 
+        nullptr, 
+        &swapchain.handle));
 
-    for (vk::Semaphore sema : m_impl->swapchain_acquires) {
-        device.destroySemaphore(sema);
+    m_impl->device.destroySwapchainKHR(old_swapchain);
+
+    for (vk::Semaphore sema : swapchain.acquires) {
+        m_impl->device.destroySemaphore(sema);
     }
 
-    for (vk::Semaphore sema : m_impl->swapchain_presents) {
-        device.destroySemaphore(sema);
+    for (vk::Semaphore sema : swapchain.presents) {
+        m_impl->device.destroySemaphore(sema);
     }
 
     // Fetch the number of swapchain images in use.
-    uint32_t num_images;
-    VK_CHECK(device.getSwapchainImagesKHR(
-        m_impl->swapchain, 
+    uint32_t num_images = 0;
+    VK_CHECK(m_impl->device.getSwapchainImagesKHR(
+        swapchain.handle, 
         &num_images, 
         nullptr));
 
     // Fetch the actual swapchain image handles.
     std::vector<vk::Image> images(num_images);
-    VK_CHECK(device.getSwapchainImagesKHR(
-        m_impl->swapchain, 
+    VK_CHECK(m_impl->device.getSwapchainImagesKHR(
+        swapchain.handle, 
         &num_images, 
         images.data()));
 
-    for (Texture texture : m_impl->swapchain_textures) {
+    for (Texture texture : swapchain.textures) {
         freeTexture(texture);
     }
  
-    m_impl->swapchain_textures.resize(num_images);
-    m_impl->swapchain_acquires.resize(num_images);
-    m_impl->swapchain_presents.resize(num_images);
+    swapchain.textures.resize(num_images);
+    swapchain.acquires.resize(num_images);
+    swapchain.presents.resize(num_images);
 
     auto sema_info = vk::SemaphoreCreateInfo {};
 
@@ -1284,17 +1310,17 @@ void RenderingDevice::resizeSwapchain(uint32_t width, uint32_t height) {
             .dimensions = { width, height },
         };
 
-        m_impl->swapchain_textures[i] = m_impl->textures.add(texture);
+        swapchain.textures[i] = m_impl->textures.add(texture);
 
-        VK_CHECK(device.createSemaphore(
+        VK_CHECK(m_impl->device.createSemaphore(
             &sema_info, 
             nullptr, 
-            &m_impl->swapchain_acquires[i]));
+            &swapchain.acquires[i]));
         
-        VK_CHECK(device.createSemaphore(
+        VK_CHECK(m_impl->device.createSemaphore(
             &sema_info, 
             nullptr, 
-            &m_impl->swapchain_presents[i]));
+            &swapchain.presents[i]));
     }
 
 #endif // IGPU_VULKAN

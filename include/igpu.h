@@ -85,10 +85,15 @@ enum class Stage : int32_t {
 };
 
 enum class Shader : int32_t {
-    eVertex,
-    eFragment,
-    eCompute,
+    eVertex = 0,
+    eFragment = 1,
+    eCompute = 2,
     eCount,
+};
+
+enum class PipelineType : int32_t {
+    eGraphics,
+    eCompute,
 };
 
 enum class Format : int32_t {
