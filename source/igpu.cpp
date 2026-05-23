@@ -14,8 +14,6 @@
 #include <unordered_map>
 #include <vector>
 
-// @Todo: Support samplers.
-
 #ifndef NDEBUG
     #define IGPU_ASSERT(cond, msg) \
         do { \
@@ -123,6 +121,11 @@ public:
     /// Returns true if this pool contains an entry for the given key.
     bool contains(key_type k) const {
         return k < m_data.size() && m_data[k].second;
+    }
+
+    /// Returns true if the contents of this pool is empty.
+    bool empty() {
+        return m_data.empty();
     }
 };
 
@@ -547,10 +550,12 @@ struct Texture_T final {
 
 struct Queue_T final {
     QueueType type;
+    uint64_t submits;
 
 #ifdef IGPU_VULKAN
     vk::Queue queue;
     uint32_t family;
+    vk::Semaphore timeline;
 #endif // IGPU_VULKAN
 };
 
@@ -573,6 +578,9 @@ struct CommandList_T final {
     vk::CommandPool pool;
     vk::CommandBuffer buffer;
 #endif // IGPU_VULKAN
+
+    /// The value that this command list was submitted at.
+    uint64_t value = ~0ull;
 };
 
 struct RenderingDevice_T final {
@@ -616,7 +624,6 @@ struct RenderingDevice_T final {
     std::map<vk::SamplerCreateInfo, vk::Sampler> samplers = {};
 
     vk::DescriptorSetLayout descriptor_layout = nullptr;
-
     vk::PipelineLayout pipeline_layout = nullptr;
 #endif // IGPU_VULKAN
 
@@ -635,7 +642,7 @@ struct RenderingDevice_T final {
     void VK_CreateCore(const RenderingDeviceInfo& info) {
         std::vector<const char*> layers = {};
         std::vector<const char*> extensions = { 
-            VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME 
+            VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
         };
 
         if (info.validation) {
@@ -822,19 +829,38 @@ struct RenderingDevice_T final {
         graphics.type = QueueType::eGraphics;
         graphics.queue = device.getQueue(indices.graphics, 0);
         graphics.family = indices.graphics;
+        graphics.submits = 0;
         queues[static_cast<uint32_t>(QueueType::eGraphics)] = graphics;
 
         Queue_T compute = {};
         compute.type = QueueType::eCompute;
         compute.queue = device.getQueue(indices.compute, 0);
         compute.family = indices.compute;
+        compute.submits = 0;
         queues[static_cast<uint32_t>(QueueType::eCompute)] = compute;
 
         Queue_T transfer = {};
         transfer.type = QueueType::eTransfer;
         transfer.queue = device.getQueue(indices.transfer, 0);
         transfer.family = indices.transfer;
+        transfer.submits = 0;
         queues[static_cast<uint32_t>(QueueType::eTransfer)] = transfer;
+
+        // Create a timeline semaphore for each of the queues.
+
+        auto type_info = vk::SemaphoreTypeCreateInfo {}
+            .setSemaphoreType(vk::SemaphoreType::eTimeline)
+            .setInitialValue(0);
+
+        auto sema_info = vk::SemaphoreCreateInfo {}
+            .setPNext(&type_info);
+
+        for (Queue_T& queue : queues) {
+            VK_CHECK(device.createSemaphore(
+                &sema_info, 
+                nullptr, 
+                &queue.timeline));
+        }
     }
 
     void VK_CreateAllocator(const RenderingDeviceInfo& info) {
@@ -1053,7 +1079,11 @@ struct RenderingDevice_T final {
     ~RenderingDevice_T() {
     #ifdef IGPU_VULKAN
 
-        // @Todo: Implement rest of destruction.
+        for (auto& [info, sampler] : samplers) {
+            device.destroySampler(sampler);
+        }
+
+        samplers.clear();
 
         if (pipeline_layout) {
             device.destroyPipelineLayout(pipeline_layout);
@@ -1071,12 +1101,78 @@ struct RenderingDevice_T final {
             descriptor_layout = nullptr;
         }
 
+        if (swapchain.handle) {
+            device.destroySwapchainKHR(swapchain.handle);
+            swapchain.handle = nullptr;
+        }
+
+        for (vk::Semaphore sema : swapchain.acquires) {
+            device.destroySemaphore(sema);
+        }
+
+        for (vk::Semaphore sema : swapchain.presents) {
+            device.destroySemaphore(sema);
+        }
+
+        swapchain.textures.clear();
+        swapchain.acquires.clear();
+        swapchain.presents.clear();
+
+        if (vma) {
+            vmaDestroyAllocator(vma);
+            vma = nullptr;
+        }
+
+        for (Queue_T& queue : queues) {
+            if (queue.timeline) {
+                device.destroySemaphore(queue.timeline);
+                queue.timeline = nullptr;
+            }
+        }
+
+        if (device) {
+            device.destroy();
+            device = nullptr;
+        }
+
+        physical_device = nullptr;
+
+        if (surface) {
+            instance.destroySurfaceKHR(surface);
+            surface = nullptr;
+        }
+
+        if (messenger) {
+            auto deleter = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>( 
+                vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+
+            IGPU_ASSERT(deleter, 
+                        "Failed to resolve 'vkDestroyDebugUtilsMessengerEXT'!");
+
+            deleter(instance, messenger, nullptr);
+            messenger = nullptr;
+        }
+
         if (instance) {
             instance.destroy();
             instance = nullptr;
         }
 
     #endif // IGPU_VULKAN
+
+        queues.clear();
+        addresses.clear();
+
+        IGPU_ASSERT(allocations.empty(), 
+                    "Some memory resources have not been destroyed!");
+        IGPU_ASSERT(lists.empty(), 
+                    "Some command list resources have not been destroyed!");
+        IGPU_ASSERT(textures.empty(), 
+                    "Some texture resources have not been destroyed!");
+        IGPU_ASSERT(semaphores.empty(),
+                    "Some semaphore resources have not been destroyed!");
+        IGPU_ASSERT(pipelines.empty(),
+                    "Some pipeline resources have not been destroyed!");
     }
 };
 
@@ -2205,10 +2301,6 @@ void RenderingDevice::endRendering(CommandList cmd) {
     cmd_.buffer.endRendering();
 
 #endif // IGPU_VULKAN
-}
-
-void RenderingDevice::setActiveTextureHeapAddress(CommandList cmd, ptr addr) {
-    // @Todo: Implement this.
 }
 
 void RenderingDevice::setPipeline(CommandList cmd, Pipeline pipeline) {

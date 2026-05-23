@@ -405,8 +405,6 @@ public:
 
     void beginRendering(CommandList cmd, const RenderingInfo& info);
     void endRendering(CommandList cmd);
-
-    void setActiveTextureHeapAddress(CommandList cmd, ptr addr);
     
     void setPipeline(CommandList cmd, Pipeline pipeline);
     void setViewport(CommandList cmd, Viewport viewport);
@@ -429,8 +427,12 @@ public:
         ptr index,
         uint32_t indices,
         uint32_t instances);
-
-    void dispatch(CommandList cmd, ptr data, uint32_t x, uint32_t y, uint32_t z);
+    void dispatch(
+        CommandList cmd, 
+        ptr data, 
+        uint32_t x, 
+        uint32_t y, 
+        uint32_t z);
 };
 
 } // namespace gpu
