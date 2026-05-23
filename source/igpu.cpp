@@ -8,10 +8,13 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <map>
 #include <set>
 #include <stack>
 #include <unordered_map>
 #include <vector>
+
+// @Todo: Support samplers.
 
 #ifndef NDEBUG
     #define IGPU_ASSERT(cond, msg) \
@@ -147,6 +150,25 @@ static vk::ImageAspectFlags VK_FormatToAspectMask(Format format) {
             return vk::ImageAspectFlagBits::eDepth;
         default:
             return vk::ImageAspectFlagBits::eNone;
+    }
+}
+
+static vk::ImageViewType VK_TextureTypeToImageViewType(TextureType type) {
+    switch (type) {
+        case TextureType::e1D:
+            return vk::ImageViewType::e1D;
+        case TextureType::e2D:
+            return vk::ImageViewType::e2D;
+        case TextureType::e3D:
+            return vk::ImageViewType::e3D;
+        case TextureType::eCube:
+            return vk::ImageViewType::eCube;
+        case TextureType::e1DArray:
+            return vk::ImageViewType::e1DArray;
+        case TextureType::e2DArray:
+            return vk::ImageViewType::e2DArray;
+        case TextureType::eCubeArray:
+            return vk::ImageViewType::eCubeArray;
     }
 }
 
@@ -303,6 +325,56 @@ static vk::PolygonMode VK_ConvertFillMode(Fill fill) {
             return vk::PolygonMode::eFill;
         case Fill::eLine:
             return vk::PolygonMode::eLine;
+    }
+}
+
+static vk::Filter VK_ConvertFilter(Filter filter) {
+    switch (filter) {
+        case Filter::eNearest:
+            return vk::Filter::eNearest;
+        case Filter::eLinear:
+            return vk::Filter::eLinear;
+    }
+}
+
+static vk::SamplerMipmapMode VK_FilterToMipmapMode(Filter filter) {
+    switch (filter) {
+        case Filter::eNearest:
+            return vk::SamplerMipmapMode::eNearest;
+        case Filter::eLinear:
+            return vk::SamplerMipmapMode::eLinear;
+    }
+}
+
+static vk::SamplerAddressMode VK_ConvertAddressMode(AddressMode mode) {
+    switch (mode) {
+        case AddressMode::eRepeat:
+            return vk::SamplerAddressMode::eRepeat;
+        case AddressMode::eMirroredRepeat:
+            return vk::SamplerAddressMode::eMirroredRepeat;
+        case AddressMode::eClampToEdge:
+            return vk::SamplerAddressMode::eClampToEdge;
+        case AddressMode::eClampToBorder:
+            return vk::SamplerAddressMode::eClampToBorder;
+        case AddressMode::eMirrorClampToEdge:
+            return vk::SamplerAddressMode::eMirrorClampToEdge;
+    }
+}
+
+static vk::BorderColor VK_ConvertBorderColor(BorderColor color) {
+    switch (color) {
+        case BorderColor::eFloatTransparentBlack:
+            return vk::BorderColor::eFloatTransparentBlack;
+        case BorderColor::eIntTransparentBlack:
+            return vk::BorderColor::eIntTransparentBlack;
+        case BorderColor::eFloatOpaqueBlack:
+            return vk::BorderColor::eFloatOpaqueBlack;
+        case BorderColor::eIntOpaqueBlack:
+            return vk::BorderColor::eIntOpaqueBlack;
+        case BorderColor::eFloatOpaqueWhite:
+            return vk::BorderColor::eFloatOpaqueWhite;
+        case BorderColor::eIntOpaqueWhite:
+            return vk::BorderColor::eIntOpaqueWhite;
     }
 }
 
@@ -468,17 +540,8 @@ struct Texture_T final {
 #ifdef IGPU_VULKAN
     vk::Image image;
     VmaAllocation alloc;
-#endif // IGPU_VULKAN
 
-    std::vector<TextureView> views;
-};
-
-struct TextureView_T final {
-    Texture texture;
-    TextureViewInfo info;
-
-#ifdef IGPU_VULKAN
-    vk::ImageView view;
+    std::map<vk::ImageViewCreateInfo, vk::ImageView> views;
 #endif // IGPU_VULKAN
 };
 
@@ -544,7 +607,13 @@ struct RenderingDevice_T final {
     uint32_t num_storage_images = 0;
     uint32_t num_samplers = 0;
 
+    uint32_t sampled_image_size = 0;
+    uint32_t storage_image_size = 0;
+    uint32_t sampler_size = 0;
+
     DescriptorBuffer dbuffer = {};
+
+    std::map<vk::SamplerCreateInfo, vk::Sampler> samplers = {};
 
     vk::DescriptorSetLayout descriptor_layout = nullptr;
 
@@ -559,7 +628,6 @@ struct RenderingDevice_T final {
 
     Pool<CommandList_T> lists = {};
     Pool<Texture_T> textures = {};
-    Pool<TextureView_T> views = {};
     Pool<Semaphore_T> semaphores = {};
     Pool<Pipeline_T> pipelines = {};
 
@@ -870,6 +938,10 @@ struct RenderingDevice_T final {
         num_storage_images = limits.maxPerStageDescriptorStorageImages;
         num_samplers = limits.maxPerStageDescriptorSamplers;
 
+        sampled_image_size = db_props.sampledImageDescriptorSize;
+        storage_image_size = db_props.storageImageDescriptorSize;
+        sampler_size = db_props.samplerDescriptorSize;
+
         std::array<vk::DescriptorBindingFlags, 3> flags = {
             vk::DescriptorBindingFlagBits::ePartiallyBound,
             vk::DescriptorBindingFlagBits::ePartiallyBound,
@@ -1088,15 +1160,19 @@ ptr RenderingDevice::malloc(uint64_t size, MemoryType type) {
                   | vk::MemoryPropertyFlagBits::eHostCached;
         break;
     }
+
+    std::array<uint32_t, 3> queue_families = {
+        m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)].family,
+        m_impl->queues[static_cast<uint32_t>(QueueType::eCompute)].family,
+        m_impl->queues[static_cast<uint32_t>(QueueType::eTransfer)].family,
+    };
  
     auto buffer_info = vk::BufferCreateInfo {}
         .setUsage(usage)
         .setSize(static_cast<vk::DeviceSize>(size))
-        .setSharingMode(vk::SharingMode::eConcurrent);
-    /* @Todo: Update these.
-    buffer_info.queueFamilyIndexCount = ...;
-    buffer_info.pQueueFamilyIndices = ...;
-    */
+        .setSharingMode(vk::SharingMode::eConcurrent)
+        .setQueueFamilyIndexCount(queue_families.size())
+        .setPQueueFamilyIndices(queue_families.data());
 
     // If the request is not asking for device-only memory, then map the 
     // memory at the point of allocation so the host pointer may be
@@ -1215,10 +1291,10 @@ void RenderingDevice::present(QueueType queue) {
 
     RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
 
-    Queue_T i_queue = m_impl->queues[static_cast<uint32_t>(queue)];
+    Queue_T queue_ = m_impl->queues[static_cast<uint32_t>(queue)];
     uint32_t index = swapchain.index;
 
-    VK_CHECK(i_queue.queue.presentKHR(vk::PresentInfoKHR {}
+    VK_CHECK(queue_.queue.presentKHR(vk::PresentInfoKHR {}
         .setWaitSemaphoreCount(1)
         .setPWaitSemaphores(&swapchain.presents[index])
         .setSwapchainCount(1)
@@ -1337,6 +1413,12 @@ Texture RenderingDevice::createTexture(const TextureInfo& info) {
     if (info.type == TextureType::eCube || info.type == TextureType::eCubeArray)
         flags |= vk::ImageCreateFlagBits::eCubeCompatible;
 
+    std::array<uint32_t, 3> queue_families = {
+        m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)].family,
+        m_impl->queues[static_cast<uint32_t>(QueueType::eCompute)].family,
+        m_impl->queues[static_cast<uint32_t>(QueueType::eTransfer)].family,
+    };
+    
     auto image_info = vk::ImageCreateInfo {}
         .setFlags(flags)
         .setFormat(VK_ConvertFormat(info.format))
@@ -1346,10 +1428,10 @@ Texture RenderingDevice::createTexture(const TextureInfo& info) {
         .setArrayLayers(info.layer_count)
         .setSamples(VK_ConvertSampleCount(info.sample_count))
         .setUsage(VK_ConvertUsage(info.usage))
-        .setSharingMode(vk::SharingMode::eConcurrent)
         .setInitialLayout(vk::ImageLayout::eUndefined)
-        .setQueueFamilyIndexCount(1 /* @Todo */)
-        .setPQueueFamilyIndices(nullptr /* @Todo */);
+        .setSharingMode(vk::SharingMode::eConcurrent)
+        .setQueueFamilyIndexCount(queue_families.size())
+        .setPQueueFamilyIndices(queue_families.data());
 
     VmaAllocationCreateInfo vma_info = {};
     vma_info.requiredFlags = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -1398,29 +1480,180 @@ Texture RenderingDevice::createTexture(const TextureInfo& info) {
 }
 
 void RenderingDevice::freeTexture(Texture texture) {
-    Texture_T i_texture = m_impl->textures.remove(texture);
+    Texture_T texture_ = m_impl->textures.remove(texture);
 
 #ifdef IGPU_VULKAN
 
-    if (!i_texture.borrowed) {
-        if (i_texture.image && i_texture.alloc)
-            vmaDestroyImage(m_impl->vma, i_texture.image, i_texture.alloc);
+    for (const auto& [info, view] : texture_.views) {
+        if (view)
+            m_impl->device.destroyImageView(view);
     }
 
-    // @Todo: Destroy all views.
+    if (!texture_.borrowed) {
+        if (texture_.image && texture_.alloc) {
+            vmaDestroyImage(m_impl->vma, texture_.image, texture_.alloc);
+            texture_.image = nullptr;
+            texture_.alloc = nullptr;
+        }
+    }
 
 #endif // IGPU_VULKAN
 }
 
+TextureDescriptor RenderingDevice::getTextureDescriptor(
+        Texture texture, const TextureViewInfo& info) {
+    TextureDescriptor desc = {};
+
+    Texture_T texture_ = m_impl->textures.get(texture);
+
+#ifdef IGPU_VULKAN
+
+    auto view_info = vk::ImageViewCreateInfo {}
+        .setImage(texture_.image)
+        .setViewType(VK_TextureTypeToImageViewType(texture_.info.type))
+        .setFormat(VK_ConvertFormat(info.format))
+        .setSubresourceRange(vk::ImageSubresourceRange {}
+            .setAspectMask(VK_FormatToAspectMask(info.format))
+            .setBaseArrayLayer(info.base_layer)
+            .setBaseMipLevel(info.base_mip)
+            .setLayerCount(info.layer_count)
+            .setLevelCount(info.mip_count));
+
+    vk::ImageView view = nullptr;
+
+    auto it = texture_.views.find(view_info);
+    if (it != texture_.views.end()) {
+        view = it->second;
+    } else {
+        VK_CHECK(m_impl->device.createImageView(&view_info, nullptr, &view));
+        texture_.views.emplace(view_info, view);
+    }
+
+    auto image_info = vk::DescriptorImageInfo {}
+        .setImageLayout(vk::ImageLayout::eGeneral)
+        .setImageView(view);
+
+    auto data = vk::DescriptorDataEXT {}
+        .setPSampledImage(&image_info);
+
+    auto get_info = vk::DescriptorGetInfoEXT {}
+        .setType(vk::DescriptorType::eSampledImage)
+        .setData(data);
+
+    m_impl->device.getDescriptorEXT(
+        &get_info, 
+        m_impl->sampled_image_size, 
+        &desc);
+
+#endif // IGPU_VULKAN
+
+    return desc;
+}
+
+TextureDescriptor RenderingDevice::getRWTextureDescriptor(
+        Texture texture, const TextureViewInfo& info) {
+    TextureDescriptor desc = {};
+
+    Texture_T texture_ = m_impl->textures.get(texture);
+
+#ifdef IGPU_VULKAN
+
+    auto view_info = vk::ImageViewCreateInfo {}
+        .setImage(texture_.image)
+        .setViewType(VK_TextureTypeToImageViewType(texture_.info.type))
+        .setFormat(VK_ConvertFormat(info.format))
+        .setSubresourceRange(vk::ImageSubresourceRange {}
+            .setAspectMask(VK_FormatToAspectMask(info.format))
+            .setBaseArrayLayer(info.base_layer)
+            .setBaseMipLevel(info.base_mip)
+            .setLayerCount(info.layer_count)
+            .setLevelCount(info.mip_count));
+
+    vk::ImageView view = nullptr;
+
+    auto it = texture_.views.find(view_info);
+    if (it != texture_.views.end()) {
+        view = it->second;
+    } else {
+        VK_CHECK(m_impl->device.createImageView(&view_info, nullptr, &view));
+        texture_.views.emplace(view_info, view);
+    }
+
+    auto image_info = vk::DescriptorImageInfo {}
+        .setImageLayout(vk::ImageLayout::eGeneral)
+        .setImageView(view);
+
+    auto data = vk::DescriptorDataEXT {}
+        .setPStorageImage(&image_info);
+
+    auto get_info = vk::DescriptorGetInfoEXT {}
+        .setType(vk::DescriptorType::eStorageImage)
+        .setData(data);
+
+    m_impl->device.getDescriptorEXT(
+        &get_info, 
+        m_impl->storage_image_size, 
+        &desc);
+
+#endif // IGPU_VULKAN
+
+    return desc;
+}
+
+SamplerDescriptor RenderingDevice::getSamplerDescriptor(
+        const SamplerInfo& info) {
+    SamplerDescriptor desc = {};
+
+#ifdef IGPU_VULKAN
+
+    auto sampler_info = vk::SamplerCreateInfo {}
+        .setMinFilter(VK_ConvertFilter(info.min))
+        .setMagFilter(VK_ConvertFilter(info.mag))
+        .setMipmapMode(VK_FilterToMipmapMode(info.mip))
+        .setAddressModeU(VK_ConvertAddressMode(info.u))
+        .setAddressModeV(VK_ConvertAddressMode(info.v))
+        .setAddressModeW(VK_ConvertAddressMode(info.w))
+        .setMipLodBias(info.mip_lod_bias)
+        .setAnisotropyEnable(info.enable_anisotropy)
+        .setMaxAnisotropy(info.max_anisotropy)
+        .setCompareOp(VK_ConvertCompareOp(info.compare))
+        .setMinLod(info.min_lod)
+        .setMaxLod(info.max_lod)
+        .setBorderColor(VK_ConvertBorderColor(info.border));
+
+    vk::Sampler sampler = nullptr;
+
+    auto it = m_impl->samplers.find(sampler_info);
+    if (it != m_impl->samplers.end()) {
+        sampler = it->second;
+    } else {
+        VK_CHECK(m_impl->device.createSampler(&sampler_info, nullptr, &sampler));
+        m_impl->samplers.emplace(sampler_info, sampler);
+    }
+
+    auto data = vk::DescriptorDataEXT {}
+        .setPSampler(&sampler);
+
+    auto get_info = vk::DescriptorGetInfoEXT {}
+        .setType(vk::DescriptorType::eSampler)
+        .setData(data);
+
+    m_impl->device.getDescriptorEXT(&get_info, m_impl->sampler_size, &desc);
+
+#endif // IGPU_VULKAN
+
+    return desc;    
+}
+
 CommandList RenderingDevice::beginRecording(QueueType queue) {
     CommandList_T list = {};
-    Queue_T i_queue = m_impl->queues[static_cast<uint32_t>(queue)];
+    Queue_T queue_ = m_impl->queues[static_cast<uint32_t>(queue)];
 
 #ifdef IGPU_VULKAN
 
     auto pool_info = vk::CommandPoolCreateInfo {}
         .setFlags(vk::CommandPoolCreateFlagBits::eTransient)
-        .setQueueFamilyIndex(i_queue.family);
+        .setQueueFamilyIndex(queue_.family);
     
     vk::Result result = m_impl->device.createCommandPool(
         &pool_info, 
@@ -1458,7 +1691,7 @@ void RenderingDevice::submit(QueueType queue,
                              const std::vector<CommandList>& lists,
                              TimelinePair signal, 
                              TimelinePair wait) {
-    Queue_T i_queue = m_impl->queues[static_cast<uint32_t>(queue)];
+    Queue_T queue_ = m_impl->queues[static_cast<uint32_t>(queue)];
 
 #ifdef IGPU_VULKAN
 
@@ -1493,7 +1726,7 @@ void RenderingDevice::submit(QueueType queue,
     }
 
     // @Todo: Return custom result value.
-    vk::Result result = i_queue.queue.submit2(submit_info);
+    vk::Result result = queue_.queue.submit2(submit_info);
     IGPU_ASSERT(result == vk::Result::eSuccess, 
                 "Failed to submit command lists.");
 
@@ -1526,24 +1759,24 @@ Semaphore RenderingDevice::createSemaphore(uint64_t value) {
 }
 
 void RenderingDevice::freeSemaphore(Semaphore sema) {
-    Semaphore_T i_sema = m_impl->semaphores.remove(sema);
+    Semaphore_T sema_ = m_impl->semaphores.remove(sema);
 
 #ifdef IGPU_VULKAN
 
-    if (i_sema.sema)
-        m_impl->device.destroySemaphore(i_sema.sema);
+    if (sema_.sema)
+        m_impl->device.destroySemaphore(sema_.sema);
 
 #endif // IGPU_VULKAN
 }
 
 void RenderingDevice::waitSemaphore(Semaphore sema, uint64_t value) {
-    Semaphore_T& i_sema = m_impl->semaphores.get(sema);
+    Semaphore_T& sema_ = m_impl->semaphores.get(sema);
 
 #ifdef IGPU_VULKAN
 
     auto wait_info = vk::SemaphoreWaitInfo {}
         .setSemaphoreCount(1)
-        .setPSemaphores(&i_sema.sema)
+        .setPSemaphores(&sema_.sema)
         .setValues(value);
 
     // @Todo: Return custom result value.
@@ -1703,18 +1936,18 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
 }
 
 void RenderingDevice::freePipeline(Pipeline pipeline) {
-    Pipeline_T i_pipeline = m_impl->pipelines.remove(pipeline);
+    Pipeline_T pipeline_ = m_impl->pipelines.remove(pipeline);
 
 #ifdef IGPU_VULKAN
 
-    if (i_pipeline.pipeline)
-        m_impl->device.destroyPipeline(i_pipeline.pipeline);
+    if (pipeline_.pipeline)
+        m_impl->device.destroyPipeline(pipeline_.pipeline);
 
 #endif // IGPU_VULKAN
 }
 
 void RenderingDevice::copy(CommandList cmd, ptr src, ptr dst, uint32_t size) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
     IGPU_ASSERT(m_impl->allocations.contains(src), 
                 "Invalid device source address!");
@@ -1731,7 +1964,7 @@ void RenderingDevice::copy(CommandList cmd, ptr src, ptr dst, uint32_t size) {
     auto region = vk::BufferCopy2 {}
         .setSize(size);
 
-    i_cmd.buffer.copyBuffer2(vk::CopyBufferInfo2 {}
+    cmd_.buffer.copyBuffer2(vk::CopyBufferInfo2 {}
         .setSrcBuffer(src_alloc.buffer)
         .setDstBuffer(dst_alloc.buffer)
         .setRegionCount(1)
@@ -1770,9 +2003,9 @@ void RenderingDevice::copyToTexture(void* src, Texture dst, const TextureRegion&
 }
 
 void RenderingDevice::copyFromTexture(Texture src, void* dst, const TextureRegion& region) {
-    Texture_T i_texture = m_impl->textures.get(src);
+    Texture_T texture_ = m_impl->textures.get(src);
 
-    const TextureInfo& info = i_texture.info;
+    const TextureInfo& info = texture_.info;
 
 #ifdef IGPU_VULKAN
 
@@ -1790,7 +2023,7 @@ void RenderingDevice::copyFromTexture(Texture src, void* dst, const TextureRegio
 
     // @Todo: Return custom result value.
     (void) m_impl->device.copyImageToMemory(vk::CopyImageToMemoryInfo {}
-        .setSrcImage(i_texture.image)
+        .setSrcImage(texture_.image)
         .setSrcImageLayout(vk::ImageLayout::eGeneral)
         .setRegionCount(1)
         .setPRegions(&copy));
@@ -1819,7 +2052,7 @@ void RenderingDevice::barrier(CommandList cmd, Stage before, Stage after) {
 
 void RenderingDevice::beginRendering(CommandList cmd, 
                                      const RenderingInfo& info) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
@@ -1827,7 +2060,28 @@ void RenderingDevice::beginRendering(CommandList cmd,
     color_atts.reserve(info.targets.size());
 
     for (const TargetInfo& target : info.targets) {
-        TextureView_T view = m_impl->views.get(target.view);
+        Texture_T texture = m_impl->textures.get(target.texture);
+        
+        auto view_info = vk::ImageViewCreateInfo {}
+            .setImage(texture.image)
+            .setViewType(VK_TextureTypeToImageViewType(texture.info.type))
+            .setFormat(VK_ConvertFormat(target.view.format))
+            .setSubresourceRange(vk::ImageSubresourceRange {}
+                .setAspectMask(VK_FormatToAspectMask(texture.info.format))
+                .setBaseArrayLayer(target.view.base_layer)
+                .setBaseMipLevel(target.view.base_mip)
+                .setLayerCount(target.view.layer_count)
+                .setLevelCount(target.view.mip_count));
+
+        vk::ImageView view = nullptr;
+
+        auto it = texture.views.find(view_info);
+        if (it != texture.views.end()) {
+            view = it->second;
+        } else {
+            VK_CHECK(m_impl->device.createImageView(&view_info, nullptr, &view));
+            texture.views.emplace(view_info, view);
+        }
 
         auto ccv = vk::ClearColorValue {
             target.clear_color.r,
@@ -1837,7 +2091,7 @@ void RenderingDevice::beginRendering(CommandList cmd,
         };
 
         color_atts.push_back(vk::RenderingAttachmentInfo {}
-            .setImageView(view.view)
+            .setImageView(view)
             .setImageLayout(vk::ImageLayout::eGeneral)
             .setLoadOp(VK_ConvertLoadOp(target.load))
             .setStoreOp(VK_ConvertStoreOp(target.store))
@@ -1861,14 +2115,35 @@ void RenderingDevice::beginRendering(CommandList cmd,
     if (info.depth) {
         const TargetInfo& target = info.depth.value();
 
-        TextureView_T view = m_impl->views.get(target.view);
+        Texture_T texture = m_impl->textures.get(target.texture);
+        
+        auto view_info = vk::ImageViewCreateInfo {}
+            .setImage(texture.image)
+            .setViewType(VK_TextureTypeToImageViewType(texture.info.type))
+            .setFormat(VK_ConvertFormat(target.view.format))
+            .setSubresourceRange(vk::ImageSubresourceRange {}
+                .setAspectMask(VK_FormatToAspectMask(texture.info.format))
+                .setBaseArrayLayer(target.view.base_layer)
+                .setBaseMipLevel(target.view.base_mip)
+                .setLayerCount(target.view.layer_count)
+                .setLevelCount(target.view.mip_count));
+
+        vk::ImageView view = nullptr;
+
+        auto it = texture.views.find(view_info);
+        if (it != texture.views.end()) {
+            view = it->second;
+        } else {
+            VK_CHECK(m_impl->device.createImageView(&view_info, nullptr, &view));
+            texture.views.emplace(view_info, view);
+        }
 
         auto cdsv = vk::ClearDepthStencilValue {}
             .setDepth(target.clear_depth)
             .setStencil(0);
 
         depth_att = vk::RenderingAttachmentInfo {}
-            .setImageView(view.view)
+            .setImageView(view)
             .setImageLayout(vk::ImageLayout::eGeneral)
             .setLoadOp(VK_ConvertLoadOp(target.load))
             .setStoreOp(VK_ConvertStoreOp(target.store))
@@ -1880,14 +2155,35 @@ void RenderingDevice::beginRendering(CommandList cmd,
     if (info.stencil) {
         const TargetInfo& target = info.stencil.value();
 
-        TextureView_T view = m_impl->views.get(target.view);
+        Texture_T texture = m_impl->textures.get(target.texture);
+        
+        auto view_info = vk::ImageViewCreateInfo {}
+            .setImage(texture.image)
+            .setViewType(VK_TextureTypeToImageViewType(texture.info.type))
+            .setFormat(VK_ConvertFormat(target.view.format))
+            .setSubresourceRange(vk::ImageSubresourceRange {}
+                .setAspectMask(VK_FormatToAspectMask(texture.info.format))
+                .setBaseArrayLayer(target.view.base_layer)
+                .setBaseMipLevel(target.view.base_mip)
+                .setLayerCount(target.view.layer_count)
+                .setLevelCount(target.view.mip_count));
+
+        vk::ImageView view = nullptr;
+
+        auto it = texture.views.find(view_info);
+        if (it != texture.views.end()) {
+            view = it->second;
+        } else {
+            VK_CHECK(m_impl->device.createImageView(&view_info, nullptr, &view));
+            texture.views.emplace(view_info, view);
+        }
 
         auto cdsv = vk::ClearDepthStencilValue {}
             .setDepth(0.f)
             .setStencil(target.clear_stencil);
 
         stencil_att = vk::RenderingAttachmentInfo {}
-            .setImageView(view.view)
+            .setImageView(view)
             .setImageLayout(vk::ImageLayout::eGeneral)
             .setLoadOp(VK_ConvertLoadOp(target.load))
             .setStoreOp(VK_ConvertStoreOp(target.store))
@@ -1896,7 +2192,7 @@ void RenderingDevice::beginRendering(CommandList cmd,
         render_info.setPStencilAttachment(&stencil_att);
     }
 
-    i_cmd.buffer.beginRendering(render_info);
+    cmd_.buffer.beginRendering(render_info);
 
 #endif // IGPU_VULKAN
 }
@@ -1928,11 +2224,11 @@ void RenderingDevice::setPipeline(CommandList cmd, Pipeline pipeline) {
 }
 
 void RenderingDevice::setViewport(CommandList cmd, Viewport viewport) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.setViewport(0, vk::Viewport {}
+    cmd_.buffer.setViewport(0, vk::Viewport {}
         .setX(viewport.x)
         .setY(viewport.y)
         .setHeight(viewport.height)
@@ -1944,11 +2240,11 @@ void RenderingDevice::setViewport(CommandList cmd, Viewport viewport) {
 }
 
 void RenderingDevice::setScissor(CommandList cmd, Rect2D scissor) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.setScissor(0, vk::Rect2D {}
+    cmd_.buffer.setScissor(0, vk::Rect2D {}
         .setOffset({ scissor.x, scissor.y })
         .setExtent({ scissor.width, scissor.height }));
 
@@ -1959,41 +2255,41 @@ void RenderingDevice::setDepthBias(CommandList cmd,
                                    float clamp, 
                                    float slope, 
                                    float constant) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.setDepthBias(constant, clamp, slope);
+    cmd_.buffer.setDepthBias(constant, clamp, slope);
 
 #endif // IGPU_VULKAN
 }
 
 void RenderingDevice::setDepthCompareOp(CommandList cmd, CompareOp op) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.setDepthCompareOp(VK_ConvertCompareOp(op));
+    cmd_.buffer.setDepthCompareOp(VK_ConvertCompareOp(op));
 
 #endif // IGPU_VULKAN
 }
 
 void RenderingDevice::setEnableDepthTest(CommandList cmd, bool value) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.setDepthTestEnable(value);
+    cmd_.buffer.setDepthTestEnable(value);
 
 #endif // IGPU_VULKAN
 }
 
 void RenderingDevice::setEnableDepthWrite(CommandList cmd, bool value) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    i_cmd.buffer.setDepthWriteEnable(value);
+    cmd_.buffer.setDepthWriteEnable(value);
 
 #endif // IGPU_VULKAN
 }
@@ -2003,13 +2299,25 @@ void RenderingDevice::drawInstanced(CommandList cmd,
                                     ptr fragment, 
                                     uint32_t vertices, 
                                     uint32_t instances) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    // @Todo: Setup push constants at the vertex and fragment offsets.
-    // e.g. i_cmd.buffer.pushConstants(pipeline_layout, stage, offset, sizeof(GpuAddr), &vertex);
-    i_cmd.buffer.draw(vertices, instances, 0, 0);
+    cmd_.buffer.pushConstants(
+        m_impl->pipeline_layout, 
+        vk::ShaderStageFlagBits::eVertex, 
+        static_cast<uint32_t>(Shader::eVertex) * sizeof(vk::DeviceAddress), 
+        sizeof(vk::DeviceAddress), 
+        &vertex);
+
+    cmd_.buffer.pushConstants(
+        m_impl->pipeline_layout,
+        vk::ShaderStageFlagBits::eFragment,
+        static_cast<uint32_t>(Shader::eFragment) * sizeof(vk::DeviceAddress),
+        sizeof(vk::DeviceAddress),
+        &fragment);
+
+    cmd_.buffer.draw(vertices, instances, 0, 0);
 
 #endif // IGPU_VULKAN
 }
@@ -2020,18 +2328,32 @@ void RenderingDevice::drawIndexedInstanced(CommandList cmd,
                                            ptr index,
                                            uint32_t indices,
                                            uint32_t instances) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    // @Todo: Setup pcs...
+    cmd_.buffer.pushConstants(
+        m_impl->pipeline_layout, 
+        vk::ShaderStageFlagBits::eVertex, 
+        static_cast<uint32_t>(Shader::eVertex) * sizeof(vk::DeviceAddress), 
+        sizeof(vk::DeviceAddress), 
+        &vertex);
 
-    // @Todo: Get the buffer and offset of the index data.
-    vk::Buffer ibo = nullptr;
-    vk::DeviceSize offset = 0;
+    cmd_.buffer.pushConstants(
+        m_impl->pipeline_layout,
+        vk::ShaderStageFlagBits::eFragment,
+        static_cast<uint32_t>(Shader::eFragment) * sizeof(vk::DeviceAddress),
+        sizeof(vk::DeviceAddress),
+        &fragment);
 
-    //i_cmd.buffer.bindIndexBuffer(ibo, ibo_offset, vk::IndexType::eUint32);
-    i_cmd.buffer.drawIndexed(indices, instances, 0, 0, 0);
+    auto it = m_impl->allocations.find(index);
+    IGPU_ASSERT(it != m_impl->allocations.end(), "Invalid address!");
+
+    AllocationInfo& alloc = it->second;
+    
+    // @Bug: Offset may be incorrect, should not be static.
+    cmd_.buffer.bindIndexBuffer(alloc.buffer, 0, vk::IndexType::eUint32);
+    cmd_.buffer.drawIndexed(indices, instances, 0, 0, 0);
 
 #endif // IGPU_VULKAN
 }
@@ -2041,12 +2363,18 @@ void RenderingDevice::dispatch(CommandList cmd,
                                uint32_t x, 
                                uint32_t y, 
                                uint32_t z) {
-    CommandList_T i_cmd = m_impl->lists.get(cmd);
+    CommandList_T cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
 
-    // @Todo: Setup push constants at the compute offset with the given data.
-    i_cmd.buffer.dispatch(x, y, z);
+    cmd_.buffer.pushConstants(
+        m_impl->pipeline_layout, 
+        vk::ShaderStageFlagBits::eCompute, 
+        static_cast<uint32_t>(Shader::eCompute) * sizeof(vk::DeviceAddress), 
+        sizeof(vk::DeviceAddress), 
+        &data);
+
+    cmd_.buffer.dispatch(x, y, z);
 
 #endif // IGPU_VULKAN
 }

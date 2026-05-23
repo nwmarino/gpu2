@@ -19,6 +19,7 @@ using ptr = uint64_t;
 
 using CommandList = uint64_t;
 using Pipeline = uint64_t;
+using Sampler = uint64_t;
 using Semaphore = uint64_t;
 using Texture = uint64_t;
 using TextureView = uint64_t;
@@ -84,7 +85,7 @@ enum class Stage : int32_t {
     eFragment,
 };
 
-enum class Shader : int32_t {
+enum class Shader : uint32_t {
     eVertex = 0,
     eFragment = 1,
     eCompute = 2,
@@ -225,7 +226,7 @@ struct TextureInfo final {
     TextureType type = TextureType::e2D;
     Format format = Format::eUndefined;
     Usage usage;
-    uint16_t layer_count = 1;
+    uint8_t layer_count = 1;
     uint8_t mip_count = 1;
     uint8_t sample_count = 1;
     std::array<uint32_t, 3> dimensions;
@@ -233,18 +234,26 @@ struct TextureInfo final {
 
 struct TextureRegion final {
     uint8_t mip = 0;
-    uint16_t base_layer = 0;
-    uint16_t layer_count = 1;
+    uint8_t base_layer = 0;
+    uint8_t layer_count = 1;
     std::array<int32_t, 3> offset = {};
     std::array<uint32_t, 3> extent = {};
 };
 
 struct TextureViewInfo final {
     Format format = Format::eUndefined;
-    uint16_t base_layer = 0;
-    uint16_t layer_count = 1;
+    uint8_t base_layer = 0;
+    uint8_t layer_count = 1;
     uint8_t base_mip = 0;
     uint8_t mip_count = 1;
+};
+
+struct TextureDescriptor final {
+    uint64_t data[8];
+};
+
+struct SamplerDescriptor final {
+    uint64_t data[4];
 };
 
 struct SamplerInfo final {
@@ -254,8 +263,7 @@ struct SamplerInfo final {
     AddressMode u = AddressMode::eClampToEdge;
     AddressMode v = AddressMode::eClampToEdge;
     AddressMode w = AddressMode::eClampToEdge;
-    float mip_load_bias = 0.5f;
-    float mip_lod = 0.0f;
+    float mip_lod_bias = 0.5f;
     bool enable_anisotropy = false;
     float max_anisotropy = 0.0f;
     CompareOp compare = CompareOp::eAlways;
@@ -287,9 +295,10 @@ struct RasterInfo final {
 };
 
 struct TargetInfo final {
+    Texture texture;
+    TextureViewInfo view;
     LoadOp load;
     StoreOp store;
-    TextureView view;
 
     union {
         ClearColorValue clear_color;
@@ -300,14 +309,10 @@ struct TargetInfo final {
 
 struct RenderingInfo final {
     Rect2D area = {};
-    uint16_t layer_count = 1;
+    uint8_t layer_count = 1;
     std::span<TargetInfo> targets = {};
     std::optional<TargetInfo> depth = std::nullopt;
     std::optional<TargetInfo> stencil = std::nullopt;
-};
-
-struct TextureDescriptor final {
-    std::array<uint64_t, 4> data;
 };
 
 enum class Present : int32_t {
@@ -361,15 +366,17 @@ public:
     void present(QueueType queue);
     void resizeSwapchain(uint32_t width, uint32_t height);
 
-    Texture createTexture(const TextureInfo& info);    
+    Texture createTexture(const TextureInfo& info);
     void freeTexture(Texture texture);
 
-    TextureDescriptor getTextureViewDescriptor(
+    TextureDescriptor getTextureDescriptor(
         Texture texture, 
         const TextureViewInfo& info);
-    TextureDescriptor getRWTextureViewDescriptor(
+    TextureDescriptor getRWTextureDescriptor(
         Texture texture, 
         const TextureViewInfo& info);
+    SamplerDescriptor getSamplerDescriptor(
+        const SamplerInfo& info);
 
     CommandList beginRecording(QueueType queue);
     void submit(QueueType queue, 
@@ -395,11 +402,6 @@ public:
     void copyFromTexture(Texture src, void* dst, const TextureRegion& region);
 
     void barrier(CommandList cmd, Stage before, Stage after);
-
-    /*
-    void signalAfter(CommandList cmd, Stage stage, ptr addr, uint64_t value);
-    void waitBefore(CommandList cmd, Stage stage, ptr addr, uint64_t value, CompareOp op);
-    */
 
     void beginRendering(CommandList cmd, const RenderingInfo& info);
     void endRendering(CommandList cmd);
