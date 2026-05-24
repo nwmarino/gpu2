@@ -186,6 +186,7 @@ enum class QueueType : uint32_t {
     eGraphics = 0,
     eCompute = 1,
     eTransfer = 2,
+    eCount,
 };
 
 struct Rect2D final {

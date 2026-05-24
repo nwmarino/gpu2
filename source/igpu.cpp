@@ -12,7 +12,6 @@
 #include <iostream>
 #include <map>
 #include <mutex>
-#include <ranges>
 #include <set>
 #include <stack>
 #include <unordered_map>
@@ -640,7 +639,7 @@ struct RenderingDevice_T final {
 
     // Backend-agnostic fields.
     std::mutex memory_mutex;
-    std::vector<Queue_T> queues = {}; // @Todo: Use array sized by QueueType.
+    std::array<Queue_T, static_cast<uint32_t>(QueueType::eCount)> queues = {};
     std::unordered_map<ptr, AllocationInfo> allocations = {};
     std::unordered_map<void*, ptr> addresses = {};
 
@@ -1195,7 +1194,7 @@ struct RenderingDevice_T final {
 
     #endif // IGPU_VULKAN
 
-        queues.clear();
+        queues = {};
         addresses.clear();
 
         IGPU_ASSERT(allocations.empty(), 
@@ -2527,7 +2526,7 @@ void RenderingDevice::drawIndexedInstanced(CommandList cmd,
 
     AllocationInfo& alloc = it->second;
     
-    // @Bug: Offset may be incorrect, should not be static.
+    // @Todo: Offset may be incorrect, should not be static.
     cmd_.buffer.bindIndexBuffer(alloc.buffer, 0, vk::IndexType::eUint32);
     cmd_.buffer.drawIndexed(indices, instances, 0, 0, 0);
 
