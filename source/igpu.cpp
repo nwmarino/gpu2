@@ -7,8 +7,12 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
+#include <format>
 #include <iostream>
 #include <map>
+#include <mutex>
+#include <ranges>
 #include <set>
 #include <stack>
 #include <unordered_map>
@@ -124,8 +128,8 @@ public:
     }
 
     /// Returns true if the contents of this pool is empty.
-    bool empty() {
-        return m_data.empty();
+    bool empty() const {
+        return (m_data.size() - m_free.size()) == 0;
     }
 };
 
@@ -548,6 +552,21 @@ struct Texture_T final {
 #endif // IGPU_VULKAN
 };
 
+struct CommandList_T final {
+#ifdef IGPU_VULKAN
+    vk::CommandPool pool;
+    vk::CommandBuffer buffer;
+#endif // IGPU_VULKAN
+
+    /// The value that this command list was submitted at.
+    uint64_t value = ~0ull;
+};
+
+struct PendingCommandList final {
+    CommandList_T list;
+    uint64_t value;
+};
+
 struct Queue_T final {
     QueueType type;
     uint64_t submits;
@@ -557,6 +576,8 @@ struct Queue_T final {
     uint32_t family;
     vk::Semaphore timeline;
 #endif // IGPU_VULKAN
+
+    std::deque<PendingCommandList> pending = {};
 };
 
 struct Semaphore_T final {
@@ -571,16 +592,6 @@ struct Pipeline_T final {
 #ifdef IGPU_VULKAN
     vk::Pipeline pipeline;
 #endif // IGPU_VULKAN
-};
-
-struct CommandList_T final {
-#ifdef IGPU_VULKAN
-    vk::CommandPool pool;
-    vk::CommandBuffer buffer;
-#endif // IGPU_VULKAN
-
-    /// The value that this command list was submitted at.
-    uint64_t value = ~0ull;
 };
 
 struct RenderingDevice_T final {
@@ -629,7 +640,7 @@ struct RenderingDevice_T final {
 
     // Backend-agnostic fields.
     std::mutex memory_mutex;
-    std::vector<Queue_T> queues = {};
+    std::vector<Queue_T> queues = {}; // @Todo: Use array sized by QueueType.
     std::unordered_map<ptr, AllocationInfo> allocations = {};
     std::unordered_map<void*, ptr> addresses = {};
 
@@ -1079,6 +1090,30 @@ struct RenderingDevice_T final {
     ~RenderingDevice_T() {
     #ifdef IGPU_VULKAN
 
+        VK_CHECK(device.waitIdle());
+
+        for (Queue_T& queue : queues) {
+            VK_CHECK(queue.queue.waitIdle());
+
+            while (!queue.pending.empty()) {
+                PendingCommandList pending = queue.pending.front();
+                queue.pending.pop_front();
+                
+                if (pending.list.buffer) {
+                    device.freeCommandBuffers(
+                        pending.list.pool, 
+                        pending.list.buffer);
+
+                    pending.list.buffer = nullptr;
+                }
+                
+                if (pending.list.pool) {
+                    device.destroyCommandPool(pending.list.pool);
+                    pending.list.pool = nullptr;
+                }
+            }
+        }
+
         for (auto& [info, sampler] : samplers) {
             device.destroySampler(sampler);
         }
@@ -1165,8 +1200,8 @@ struct RenderingDevice_T final {
 
         IGPU_ASSERT(allocations.empty(), 
                     "Some memory resources have not been destroyed!");
-        IGPU_ASSERT(lists.empty(), 
-                    "Some command list resources have not been destroyed!");
+        IGPU_ASSERT(lists.empty(),
+                    "Some command lists have not been submitted!");
         IGPU_ASSERT(textures.empty(), 
                     "Some texture resources have not been destroyed!");
         IGPU_ASSERT(semaphores.empty(),
@@ -1747,11 +1782,37 @@ CommandList RenderingDevice::beginRecording(QueueType queue) {
 
 #ifdef IGPU_VULKAN
 
+    uint64_t completed = 0;
+    vk::Result result = m_impl->device.getSemaphoreCounterValue(
+        queue_.timeline, 
+        &completed);
+
+    if (result != vk::Result::eSuccess)
+        return 0;
+
+    while (!queue_.pending.empty() && queue_.pending.front().value <= completed) {
+        PendingCommandList pending = queue_.pending.front();
+        queue_.pending.pop_front();
+
+        if (pending.list.buffer) {
+                m_impl->device.freeCommandBuffers(
+                    pending.list.pool, 
+                    pending.list.buffer);
+
+                pending.list.buffer = nullptr;
+            }
+
+        if (pending.list.pool) {
+            m_impl->device.destroyCommandPool(pending.list.pool);
+            pending.list.pool = nullptr;
+        }
+    }
+
     auto pool_info = vk::CommandPoolCreateInfo {}
         .setFlags(vk::CommandPoolCreateFlagBits::eTransient)
         .setQueueFamilyIndex(queue_.family);
     
-    vk::Result result = m_impl->device.createCommandPool(
+    result = m_impl->device.createCommandPool(
         &pool_info, 
         nullptr, 
         &list.pool);
@@ -1791,40 +1852,63 @@ void RenderingDevice::submit(QueueType queue,
 
 #ifdef IGPU_VULKAN
 
+    const uint64_t value = ++queue_.submits;
+
+    std::vector<PendingCommandList> pending = {};
     std::vector<vk::CommandBufferSubmitInfo> buffers = {};
+    pending.reserve(lists.size());
     buffers.reserve(lists.size());
 
-    for (CommandList list : lists) {
+    for (CommandList cmd : lists) {
+        CommandList_T cmd_ = m_impl->lists.remove(cmd);
+
+        pending.push_back(PendingCommandList {
+            .list = cmd_,
+            .value = value,
+        });
+
         buffers.push_back(vk::CommandBufferSubmitInfo {}
-            .setCommandBuffer(m_impl->lists.get(list).buffer));
+            .setCommandBuffer(cmd_.buffer));
+    }
+
+    std::vector<vk::SemaphoreSubmitInfo> waits = {};
+    std::vector<vk::SemaphoreSubmitInfo> signals = {
+        vk::SemaphoreSubmitInfo {}
+            .setSemaphore(queue_.timeline)
+            .setValue(value)
+            .setStageMask(vk::PipelineStageFlagBits2::eAllCommands),
+    };
+    
+    if (signal.sema) {
+        signals.push_back(vk::SemaphoreSubmitInfo {}
+            .setSemaphore(m_impl->semaphores.get(signal.sema).sema)
+            .setValue(signal.value)
+            .setStageMask(vk::PipelineStageFlagBits2::eAllCommands));
+    }
+
+    if (wait.sema) {
+        waits.push_back(vk::SemaphoreSubmitInfo {}
+            .setSemaphore(m_impl->semaphores.get(wait.sema).sema)
+            .setValue(wait.value)
+            .setStageMask(vk::PipelineStageFlagBits2::eAllCommands));
     }
 
     auto submit_info = vk::SubmitInfo2 {}
         .setCommandBufferInfoCount(static_cast<uint32_t>(buffers.size()))
-        .setPCommandBufferInfos(buffers.data());
-
-    if (signal.sema) {
-        auto signal_info = vk::SemaphoreSubmitInfo {}
-            .setSemaphore(m_impl->semaphores.get(signal.sema).sema)
-            .setValue(signal.value);
-
-        submit_info.setSignalSemaphoreInfoCount(1);
-        submit_info.setPSignalSemaphoreInfos(&signal_info);
-    }
-
-    if (wait.sema) {
-        auto wait_info = vk::SemaphoreSubmitInfo {}
-            .setSemaphore(m_impl->semaphores.get(wait.sema).sema)
-            .setValue(wait.value);
-
-        submit_info.setWaitSemaphoreInfoCount(1);
-        submit_info.setPWaitSemaphoreInfos(&wait_info);
-    }
+        .setPCommandBufferInfos(buffers.data())
+        .setSignalSemaphoreInfoCount(signals.size())
+        .setPSignalSemaphoreInfos(signals.data())
+        .setWaitSemaphoreInfoCount(waits.size())
+        .setPWaitSemaphoreInfos(waits.data());
 
     // @Todo: Return custom result value.
     vk::Result result = queue_.queue.submit2(submit_info);
     IGPU_ASSERT(result == vk::Result::eSuccess, 
                 "Failed to submit command lists.");
+
+    for (PendingCommandList& list : pending) {
+        queue_.pending.push_back(std::move(list));
+    }
 
 #endif // IGPU_VULKAN
 }
