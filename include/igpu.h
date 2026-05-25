@@ -24,7 +24,9 @@ using Semaphore = uint64_t;
 using Texture = uint64_t;
 using TextureView = uint64_t;
 
-struct RenderingDevice_T; 
+struct RenderingDevice_T;
+
+static constexpr uint64_t InvalidHandle = ~0ull;
 
 /// The different types of host/device memory that can be allocated.
 enum class MemoryType : int32_t {
@@ -293,6 +295,46 @@ struct RasterInfo final {
     std::span<AttachmentInfo> atts = {};
     Format depth = Format::eUndefined;
     Format stencil = Format::eUndefined;
+
+    constexpr RasterInfo& setTopology(Topology value) {
+        topology = value;
+        return *this;
+    }
+
+    constexpr RasterInfo& setCull(Cull value) {
+        cull = value;
+        return *this;
+    }
+
+    constexpr RasterInfo& setFill(Fill value) {
+        fill = value;
+        return *this;
+    }
+
+    constexpr RasterInfo& setEnableAlphaToCoverage(bool value) {
+        alpha_to_coverage = value;
+        return *this;
+    }
+
+    constexpr RasterInfo& setSampleCount(uint8_t value) {
+        sample_count = value;
+        return *this;
+    }
+
+    constexpr RasterInfo& setAttachments(const std::span<AttachmentInfo>& value) {
+        atts = value;
+        return *this;
+    }
+
+    constexpr RasterInfo& setDepth(Format value) {
+        depth = value;
+        return *this;
+    }
+
+    constexpr RasterInfo& setStencil(Format value) {
+        stencil = value;
+        return *this;
+    }
 };
 
 struct TargetInfo final {
@@ -329,7 +371,43 @@ struct RenderingDeviceInfo final {
     uint32_t height;
     Format format = Format::eRGBA8Unorm;
     Present present = Present::eImmediate;
+    uint32_t frames_in_flight = 1;
     bool validation = false;
+
+    constexpr RenderingDeviceInfo& setWindow(void* value) {
+        window = value;
+        return *this;
+    }
+
+    constexpr RenderingDeviceInfo& setWidth(uint32_t value) {
+        width = value;
+        return *this;
+    }
+
+    constexpr RenderingDeviceInfo& setHeight(uint32_t value) {
+        height = value;
+        return *this;
+    }
+
+    constexpr RenderingDeviceInfo& setFormat(Format value) {
+        format = value;
+        return *this;
+    }
+
+    constexpr RenderingDeviceInfo& setPresent(Present value) {
+        present = value;
+        return *this;
+    }
+
+    constexpr RenderingDeviceInfo& setFramesInFlight(uint32_t value) {
+        frames_in_flight = value;
+        return *this;
+    }
+
+    constexpr RenderingDeviceInfo& setEnableValidation(bool value) {
+        validation = value;
+        return *this;
+    }
 };
 
 class RenderingDevice final {
@@ -357,6 +435,8 @@ public:
     /// Returns the creation info used for this rendering device.
     const RenderingDeviceInfo& info() const { return m_info; }
 
+    void waitIdle();
+
     ptr malloc(uint64_t size, MemoryType type = MemoryType::eDefault);
     void free(ptr p);
 
@@ -364,7 +444,7 @@ public:
     ptr hostToDeviceAddress(void* p);
 
     Texture acquireSwapchainTexture();
-    void present(QueueType queue);
+    void present();
     void resizeSwapchain(uint32_t width, uint32_t height);
 
     Texture createTexture(const TextureInfo& info);
@@ -382,9 +462,11 @@ public:
     CommandList beginRecording(QueueType queue);
     void submit(QueueType queue, 
                 const std::vector<CommandList>& lists,
-                TimelinePair signal = {}, 
-                TimelinePair wait = {});
+                const std::vector<TimelinePair>& signals = {}, 
+                const std::vector<TimelinePair>& wait = {});
+    void submitAndPresent(CommandList cmd);
 
+    Semaphore createSemaphore();
     Semaphore createSemaphore(uint64_t value);
     void freeSemaphore(Semaphore sema);
     void waitSemaphore(Semaphore sema, uint64_t value);

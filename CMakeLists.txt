@@ -38,3 +38,13 @@ target_link_libraries(igpu
         glfw
         Vulkan::Vulkan
 )
+
+add_executable(triangle
+    examples/triangle/triangle.cpp
+)
+
+target_link_libraries(triangle
+    PRIVATE
+        igpu
+        glfw
+)

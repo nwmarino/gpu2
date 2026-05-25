@@ -3,3 +3,7 @@ build/
 lib/
 *.lib
 *.o
+*.exe
+*.ilk
+*.pdb
+*.spv
