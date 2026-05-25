@@ -24,9 +24,9 @@ using Semaphore = uint64_t;
 using Texture = uint64_t;
 using TextureView = uint64_t;
 
-struct RenderingDevice_T;
+struct Device_T;
 
-static constexpr uint64_t InvalidHandle = ~0ull;
+static constexpr uint64_t null = ~0ull;
 
 /// The different types of host/device memory that can be allocated.
 enum class MemoryType : int32_t {
@@ -365,7 +365,7 @@ enum class Present : int32_t {
     eMailbox,
 };
 
-struct RenderingDeviceInfo final {
+struct DeviceInfo final {
     void* window = nullptr;
     uint32_t width;
     uint32_t height;
@@ -374,66 +374,73 @@ struct RenderingDeviceInfo final {
     uint32_t frames_in_flight = 1;
     bool validation = false;
 
-    constexpr RenderingDeviceInfo& setWindow(void* value) {
+    constexpr DeviceInfo& setWindow(void* value) {
         window = value;
         return *this;
     }
 
-    constexpr RenderingDeviceInfo& setWidth(uint32_t value) {
+    constexpr DeviceInfo& setWidth(uint32_t value) {
         width = value;
         return *this;
     }
 
-    constexpr RenderingDeviceInfo& setHeight(uint32_t value) {
+    constexpr DeviceInfo& setHeight(uint32_t value) {
         height = value;
         return *this;
     }
 
-    constexpr RenderingDeviceInfo& setFormat(Format value) {
+    constexpr DeviceInfo& setFormat(Format value) {
         format = value;
         return *this;
     }
 
-    constexpr RenderingDeviceInfo& setPresent(Present value) {
+    constexpr DeviceInfo& setPresent(Present value) {
         present = value;
         return *this;
     }
 
-    constexpr RenderingDeviceInfo& setFramesInFlight(uint32_t value) {
+    constexpr DeviceInfo& setFramesInFlight(uint32_t value) {
         frames_in_flight = value;
         return *this;
     }
 
-    constexpr RenderingDeviceInfo& setEnableValidation(bool value) {
+    constexpr DeviceInfo& setEnableValidation(bool value) {
         validation = value;
         return *this;
     }
 };
 
-class RenderingDevice final {
-    RenderingDeviceInfo m_info;
+class Device final {
+    DeviceInfo m_info;
 
-    RenderingDevice_T* m_impl = nullptr;
+    Device_T* m_impl = nullptr;
 
-    explicit RenderingDevice(const RenderingDeviceInfo& info,
-                             RenderingDevice_T* impl) 
+    explicit Device(const DeviceInfo& info, Device_T* impl) 
         : m_info(info)
         , m_impl(impl) {}
 
 public:
     [[nodiscard]]
-    static RenderingDevice* Create(const RenderingDeviceInfo& info);
+    static Device* Create(const DeviceInfo& info);
 
-    ~RenderingDevice();
+    ~Device();
 
-    RenderingDevice(const RenderingDevice&) = delete;
-    void operator=(const RenderingDevice&) = delete;
+    Device(const Device&) = delete;
+    void operator=(const Device&) = delete;
 
-    RenderingDevice(RenderingDevice&&) noexcept = delete;
-    void operator=(RenderingDevice&&) noexcept = delete;
+    Device(Device&& other) noexcept
+        : m_impl(std::move(other.m_impl))
+        , m_info(other.m_info) {}
+    
+    void operator=(Device&& other) noexcept {
+        if (this != &other) {
+            m_impl = std::move(other.m_impl);
+            m_info = other.m_info;
+        }
+    }
 
-    /// Returns the creation info used for this rendering device.
-    const RenderingDeviceInfo& info() const { return m_info; }
+    /// Returns the creation info used for this device.
+    const DeviceInfo& info() const { return m_info; }
 
     void waitIdle();
 

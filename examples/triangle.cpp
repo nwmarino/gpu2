@@ -31,14 +31,14 @@ int main() {
 
     GLFWwindow* window = glfwCreateWindow(800, 600, "Triangle", nullptr, nullptr);
 
-    auto device_info = gpu::RenderingDeviceInfo {}
+    auto device_info = gpu::DeviceInfo {}
         .setWindow(window)
         .setWidth(800)
         .setHeight(600)
         .setFramesInFlight(FRAMES_IN_FLIGHT)
         .setEnableValidation(true);
 
-    gpu::RenderingDevice* device = gpu::RenderingDevice::Create(device_info);
+    gpu::Device* device = gpu::Device::Create(device_info);
 
     std::string vertex_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/triangle.vert.spv");
     std::string fragment_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/triangle.frag.spv");

@@ -22,10 +22,10 @@ static std::string readFile(const std::string& path) {
 }
 
 int main() {
-    auto device_info = gpu::RenderingDeviceInfo {}
+    auto device_info = gpu::DeviceInfo {}
         .setEnableValidation(true);
 
-    gpu::RenderingDevice* device = gpu::RenderingDevice::Create(device_info);
+    gpu::Device* device = gpu::Device::Create(device_info);
 
     std::string compute_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/compute.comp.spv");
 

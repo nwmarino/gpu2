@@ -593,9 +593,7 @@ struct Pipeline_T final {
 #endif // IGPU_VULKAN
 };
 
-struct RenderingDevice_T final {
-    RenderingDevice* parent = nullptr;
-
+struct Device_T final {
 #ifdef IGPU_VULKAN
     struct Swapchain final {
         vk::SwapchainKHR handle = nullptr;
@@ -656,7 +654,7 @@ struct RenderingDevice_T final {
     Pool<Pipeline_T> pipelines = {};
 
 #ifdef IGPU_VULKAN
-    void VK_CreateCore(const RenderingDeviceInfo& info) {
+    void VK_CreateCore(const DeviceInfo& info) {
         std::vector<const char*> layers = {};
         std::vector<const char*> extensions = {};
 
@@ -754,7 +752,7 @@ struct RenderingDevice_T final {
         IGPU_ASSERT(vkGetDescriptor, "Failed to resolve 'vkGetDescriptorEXT'");
     }
 
-    void VK_CreateDevice(const RenderingDeviceInfo& info) {
+    void VK_CreateDevice(const DeviceInfo& info) {
         std::vector<const char*> extensions = { 
             VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME, 
             "VK_KHR_swapchain",
@@ -897,7 +895,7 @@ struct RenderingDevice_T final {
         }
     }
 
-    void VK_CreateAllocator(const RenderingDeviceInfo& info) {
+    void VK_CreateAllocator(const DeviceInfo& info) {
         VmaVulkanFunctions funcs = {};
         funcs.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
         funcs.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
@@ -912,7 +910,7 @@ struct RenderingDevice_T final {
         VK_CHECK(vk::Result(vmaCreateAllocator(&vma_info, &vma)));
     }
 
-    void VK_CreateSwapchain(const RenderingDeviceInfo& info) {
+    void VK_CreateSwapchain(const DeviceInfo& info) {
         Swapchain& sw = swapchain;
         sw.frames_in_flight = info.frames_in_flight;
 
@@ -999,7 +997,7 @@ struct RenderingDevice_T final {
         sema_info.setPNext(&timeline_info);
     }
 
-    void VK_CreateDescriptors(const RenderingDeviceInfo& info) {
+    void VK_CreateDescriptors(const DeviceInfo& info) {
         vk::PhysicalDeviceDescriptorBufferPropertiesEXT db_props = {};
         vk::PhysicalDeviceProperties2 props = {};
         props.pNext = &db_props;
@@ -1088,7 +1086,7 @@ struct RenderingDevice_T final {
             .setBuffer(dbuffer.buffer));
     }
 
-    void VK_CreateLayout(const RenderingDeviceInfo& info) {
+    void VK_CreateLayout(const DeviceInfo& info) {
         std::vector<vk::PushConstantRange> ranges = {};
 
         for (int32_t i = 0; i < static_cast<int32_t>(Shader::eCount); ++i) {
@@ -1114,7 +1112,7 @@ struct RenderingDevice_T final {
 
 #endif // IGPU_VULKAN
 
-    explicit RenderingDevice_T(const RenderingDeviceInfo& info) {
+    explicit Device_T(const DeviceInfo& info) {
     #ifdef IGPU_VULKAN
 
         VK_CreateCore(info);
@@ -1127,7 +1125,7 @@ struct RenderingDevice_T final {
     #endif // IGPU_VULKAN
     }
 
-    ~RenderingDevice_T() {
+    ~Device_T() {
     #ifdef IGPU_VULKAN
 
         VK_CHECK(device.waitIdle());
@@ -1260,7 +1258,7 @@ struct RenderingDevice_T final {
 #ifdef IGPU_VULKAN
 
 static vk::PipelineShaderStageCreateInfo createShaderStage(
-        RenderingDevice_T& device, 
+        Device_T& device, 
         std::string_view spirv, 
         vk::ShaderStageFlagBits stage) {
     auto stage_info = vk::PipelineShaderStageCreateInfo {}
@@ -1282,29 +1280,29 @@ static vk::PipelineShaderStageCreateInfo createShaderStage(
 #endif // IGPU_VULKAN
 
 //>==---------------------------------------------------------------------------
-//                          RenderingDevice Implementation
+//                          Device Implementation
 //>==---------------------------------------------------------------------------
 
-RenderingDevice* RenderingDevice::Create(const RenderingDeviceInfo& info) {
-    RenderingDevice_T* impl = new (std::nothrow) RenderingDevice_T(info);
+Device* Device::Create(const DeviceInfo& info) {
+    Device_T* impl = new (std::nothrow) Device_T(info);
     if (!impl)
         return nullptr;
 
-    return new (std::nothrow) RenderingDevice(info, impl);
+    return new (std::nothrow) Device(info, impl);
 }
 
-RenderingDevice::~RenderingDevice() {
+Device::~Device() {
     if (m_impl) {
         delete m_impl;
         m_impl = nullptr;
     }
 }
 
-void RenderingDevice::waitIdle() {
+void Device::waitIdle() {
     VK_CHECK(m_impl->device.waitIdle());
 }
 
-ptr RenderingDevice::malloc(uint64_t size, MemoryType type) {
+ptr Device::malloc(uint64_t size, MemoryType type) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     ptr addr = 0;
@@ -1410,7 +1408,7 @@ ptr RenderingDevice::malloc(uint64_t size, MemoryType type) {
     return addr;
 }
 
-void RenderingDevice::free(ptr p) {
+void Device::free(ptr p) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     // Look for the address in the device allocation table.
@@ -1430,7 +1428,7 @@ void RenderingDevice::free(ptr p) {
     m_impl->allocations.erase(it);
 }
 
-void* RenderingDevice::deviceToHostAddress(ptr p) {
+void* Device::deviceToHostAddress(ptr p) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     // Look for the device address in the allocation table.
@@ -1441,7 +1439,7 @@ void* RenderingDevice::deviceToHostAddress(ptr p) {
     return nullptr;
 }
 
-ptr RenderingDevice::hostToDeviceAddress(void* p) {
+ptr Device::hostToDeviceAddress(void* p) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     // Look for the host address in the address translation table.
@@ -1452,10 +1450,10 @@ ptr RenderingDevice::hostToDeviceAddress(void* p) {
     return 0;
 }
 
-Texture RenderingDevice::acquireSwapchainTexture() {
+Texture Device::acquireSwapchainTexture() {
 #ifdef IGPU_VULKAN
 
-    RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
+    Device_T::Swapchain& swapchain = m_impl->swapchain;
 
     swapchain.acquire_index = (swapchain.acquire_index + 1) % swapchain.frames_in_flight;
 
@@ -1467,11 +1465,11 @@ Texture RenderingDevice::acquireSwapchainTexture() {
         &swapchain.image_index);
 
     if (result != vk::Result::eSuccess)
-        return InvalidHandle;
+        return gpu::null;
 
     CommandList cmd = beginRecording(QueueType::eGraphics);
-    if (cmd == InvalidHandle)
-        return InvalidHandle;
+    if (cmd == gpu::null)
+        return gpu::null;
 
     Texture_T& texture_ = m_impl->textures.get(swapchain.textures[swapchain.image_index]);
     Queue_T& queue_ = m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)];
@@ -1532,12 +1530,12 @@ Texture RenderingDevice::acquireSwapchainTexture() {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::present() {
+void Device::present() {
     Queue_T& queue_ = m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)];
 
 #ifdef IGPU_VULKAN
 
-    RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
+    Device_T::Swapchain& swapchain = m_impl->swapchain;
 
     vk::Semaphore wait = swapchain.present_semaphores[swapchain.image_index];
 
@@ -1551,7 +1549,7 @@ void RenderingDevice::present() {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::resizeSwapchain(uint32_t width, uint32_t height) {
+void Device::resizeSwapchain(uint32_t width, uint32_t height) {
 #ifdef IGPU_VULKAN
 
     // @Todo: Shouldn't abort on failure.
@@ -1562,7 +1560,7 @@ void RenderingDevice::resizeSwapchain(uint32_t width, uint32_t height) {
         m_impl->surface, 
         &caps));
 
-    RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
+    Device_T::Swapchain& swapchain = m_impl->swapchain;
     vk::SwapchainKHR old_swapchain = swapchain.handle;
 
     auto info = vk::SwapchainCreateInfoKHR {}
@@ -1653,7 +1651,7 @@ void RenderingDevice::resizeSwapchain(uint32_t width, uint32_t height) {
 #endif // IGPU_VULKAN
 }
 
-Texture RenderingDevice::createTexture(const TextureInfo& info) {
+Texture Device::createTexture(const TextureInfo& info) {
     Texture_T texture = {};
     texture.info = info;
 
@@ -1730,7 +1728,7 @@ Texture RenderingDevice::createTexture(const TextureInfo& info) {
     return m_impl->textures.add(texture);
 }
 
-void RenderingDevice::freeTexture(Texture texture) {
+void Device::freeTexture(Texture texture) {
     Texture_T texture_ = m_impl->textures.remove(texture);
 
 #ifdef IGPU_VULKAN
@@ -1751,7 +1749,7 @@ void RenderingDevice::freeTexture(Texture texture) {
 #endif // IGPU_VULKAN
 }
 
-TextureDescriptor RenderingDevice::getTextureDescriptor(
+TextureDescriptor Device::getTextureDescriptor(
         Texture texture, const TextureViewInfo& info) {
     TextureDescriptor desc = {};
 
@@ -1802,7 +1800,7 @@ TextureDescriptor RenderingDevice::getTextureDescriptor(
     return desc;
 }
 
-TextureDescriptor RenderingDevice::getRWTextureDescriptor(
+TextureDescriptor Device::getRWTextureDescriptor(
         Texture texture, const TextureViewInfo& info) {
     TextureDescriptor desc = {};
 
@@ -1853,7 +1851,7 @@ TextureDescriptor RenderingDevice::getRWTextureDescriptor(
     return desc;
 }
 
-SamplerDescriptor RenderingDevice::getSamplerDescriptor(
+SamplerDescriptor Device::getSamplerDescriptor(
         const SamplerInfo& info) {
     SamplerDescriptor desc = {};
 
@@ -1902,7 +1900,7 @@ SamplerDescriptor RenderingDevice::getSamplerDescriptor(
     return desc;
 }
 
-CommandList RenderingDevice::beginRecording(QueueType queue) {
+CommandList Device::beginRecording(QueueType queue) {
     CommandList_T list = {};
     Queue_T& queue_ = m_impl->queues[static_cast<uint32_t>(queue)];
 
@@ -1967,7 +1965,7 @@ CommandList RenderingDevice::beginRecording(QueueType queue) {
     return m_impl->lists.add(list);
 }
 
-void RenderingDevice::submit(QueueType queue, 
+void Device::submit(QueueType queue, 
                              const std::vector<CommandList>& lists,
                              const std::vector<TimelinePair>& signals, 
                              const std::vector<TimelinePair>& waits) {
@@ -2038,7 +2036,7 @@ void RenderingDevice::submit(QueueType queue,
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::submitAndPresent(CommandList cmd, Semaphore signal, uint64_t value) {
+void Device::submitAndPresent(CommandList cmd, Semaphore signal, uint64_t value) {
     CommandList_T cmd_ = m_impl->lists.remove(cmd);
     Queue_T& queue_ = m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)];
 
@@ -2046,7 +2044,7 @@ void RenderingDevice::submitAndPresent(CommandList cmd, Semaphore signal, uint64
 
     const uint64_t submit = ++queue_.submits;
 
-    RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
+    Device_T::Swapchain& swapchain = m_impl->swapchain;
     uint32_t image_index = swapchain.image_index;
     Texture_T& texture_ = m_impl->textures.get(swapchain.textures[image_index]);
 
@@ -2107,7 +2105,7 @@ void RenderingDevice::submitAndPresent(CommandList cmd, Semaphore signal, uint64
     present();
 }
 
-Semaphore RenderingDevice::createSemaphore(uint64_t value) {
+Semaphore Device::createSemaphore(uint64_t value) {
     Semaphore_T sema = {};
 
 #ifdef IGPU_VULKAN
@@ -2132,7 +2130,7 @@ Semaphore RenderingDevice::createSemaphore(uint64_t value) {
     return m_impl->semaphores.add(sema);
 }
 
-void RenderingDevice::freeSemaphore(Semaphore sema) {
+void Device::freeSemaphore(Semaphore sema) {
     Semaphore_T sema_ = m_impl->semaphores.remove(sema);
 
 #ifdef IGPU_VULKAN
@@ -2143,7 +2141,7 @@ void RenderingDevice::freeSemaphore(Semaphore sema) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::waitSemaphore(Semaphore sema, uint64_t value) {
+void Device::waitSemaphore(Semaphore sema, uint64_t value) {
     Semaphore_T& sema_ = m_impl->semaphores.get(sema);
 
 #ifdef IGPU_VULKAN
@@ -2159,7 +2157,7 @@ void RenderingDevice::waitSemaphore(Semaphore sema, uint64_t value) {
 #endif // IGPU_VULKAN
 }
 
-Pipeline RenderingDevice::createComputePipeline(std::string_view compute) {
+Pipeline Device::createComputePipeline(std::string_view compute) {
     Pipeline_T pipeline = {};
     pipeline.type = PipelineType::eCompute;
 
@@ -2192,7 +2190,7 @@ Pipeline RenderingDevice::createComputePipeline(std::string_view compute) {
     return m_impl->pipelines.add(pipeline);
 }
 
-Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex, 
+Pipeline Device::createGraphicsPipeline(std::string_view vertex, 
                                                  std::string_view fragment, 
                                                  const RasterInfo& info) {
     Pipeline_T pipeline = {};
@@ -2309,7 +2307,7 @@ Pipeline RenderingDevice::createGraphicsPipeline(std::string_view vertex,
     return m_impl->pipelines.add(pipeline);
 }
 
-void RenderingDevice::freePipeline(Pipeline pipeline) {
+void Device::freePipeline(Pipeline pipeline) {
     Pipeline_T pipeline_ = m_impl->pipelines.remove(pipeline);
 
 #ifdef IGPU_VULKAN
@@ -2320,7 +2318,7 @@ void RenderingDevice::freePipeline(Pipeline pipeline) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::copy(CommandList cmd, ptr src, ptr dst, uint32_t size) {
+void Device::copy(CommandList cmd, ptr src, ptr dst, uint32_t size) {
     CommandList_T cmd_ = m_impl->lists.get(cmd);
 
     IGPU_ASSERT(m_impl->allocations.contains(src), 
@@ -2347,7 +2345,7 @@ void RenderingDevice::copy(CommandList cmd, ptr src, ptr dst, uint32_t size) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::copyToTexture(void* src, Texture dst, const TextureRegion& region) {
+void Device::copyToTexture(void* src, Texture dst, const TextureRegion& region) {
     Texture_T& texture_ = m_impl->textures.get(dst);
 
     const TextureInfo& info = texture_.info;
@@ -2376,7 +2374,7 @@ void RenderingDevice::copyToTexture(void* src, Texture dst, const TextureRegion&
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::copyFromTexture(Texture src, void* dst, const TextureRegion& region) {
+void Device::copyFromTexture(Texture src, void* dst, const TextureRegion& region) {
     Texture_T& texture_ = m_impl->textures.get(src);
 
     const TextureInfo& info = texture_.info;
@@ -2405,7 +2403,7 @@ void RenderingDevice::copyFromTexture(Texture src, void* dst, const TextureRegio
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::barrier(CommandList cmd, Stage before, Stage after) {
+void Device::barrier(CommandList cmd, Stage before, Stage after) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
@@ -2424,7 +2422,7 @@ void RenderingDevice::barrier(CommandList cmd, Stage before, Stage after) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::beginRendering(CommandList cmd, 
+void Device::beginRendering(CommandList cmd, 
                                      const RenderingInfo& info) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
@@ -2571,7 +2569,7 @@ void RenderingDevice::beginRendering(CommandList cmd,
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::endRendering(CommandList cmd) {
+void Device::endRendering(CommandList cmd) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
@@ -2581,7 +2579,7 @@ void RenderingDevice::endRendering(CommandList cmd) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setPipeline(CommandList cmd, Pipeline pipeline) {
+void Device::setPipeline(CommandList cmd, Pipeline pipeline) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
     Pipeline_T& pipeline_ = m_impl->pipelines.get(pipeline);
 
@@ -2593,7 +2591,7 @@ void RenderingDevice::setPipeline(CommandList cmd, Pipeline pipeline) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setViewport(CommandList cmd, Viewport viewport) {
+void Device::setViewport(CommandList cmd, Viewport viewport) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
@@ -2609,7 +2607,7 @@ void RenderingDevice::setViewport(CommandList cmd, Viewport viewport) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setScissor(CommandList cmd, Rect2D scissor) {
+void Device::setScissor(CommandList cmd, Rect2D scissor) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
@@ -2621,7 +2619,7 @@ void RenderingDevice::setScissor(CommandList cmd, Rect2D scissor) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setDepthBias(CommandList cmd, 
+void Device::setDepthBias(CommandList cmd, 
                                    float clamp, 
                                    float slope, 
                                    float constant) {
@@ -2634,7 +2632,7 @@ void RenderingDevice::setDepthBias(CommandList cmd,
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setDepthCompareOp(CommandList cmd, CompareOp op) {
+void Device::setDepthCompareOp(CommandList cmd, CompareOp op) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
@@ -2644,7 +2642,7 @@ void RenderingDevice::setDepthCompareOp(CommandList cmd, CompareOp op) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setEnableDepthTest(CommandList cmd, bool value) {
+void Device::setEnableDepthTest(CommandList cmd, bool value) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
@@ -2654,7 +2652,7 @@ void RenderingDevice::setEnableDepthTest(CommandList cmd, bool value) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::setEnableDepthWrite(CommandList cmd, bool value) {
+void Device::setEnableDepthWrite(CommandList cmd, bool value) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
@@ -2664,7 +2662,7 @@ void RenderingDevice::setEnableDepthWrite(CommandList cmd, bool value) {
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::drawInstanced(CommandList cmd,
+void Device::drawInstanced(CommandList cmd,
                                     ptr vertex, 
                                     ptr fragment, 
                                     uint32_t vertices, 
@@ -2692,7 +2690,7 @@ void RenderingDevice::drawInstanced(CommandList cmd,
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::drawIndexedInstanced(CommandList cmd,
+void Device::drawIndexedInstanced(CommandList cmd,
                                            ptr vertex,
                                            ptr fragment,
                                            ptr index,
@@ -2728,7 +2726,7 @@ void RenderingDevice::drawIndexedInstanced(CommandList cmd,
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::dispatch(CommandList cmd, 
+void Device::dispatch(CommandList cmd, 
                                ptr data, 
                                uint32_t x, 
                                uint32_t y, 
