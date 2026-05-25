@@ -5,15 +5,21 @@
 
 struct ComputeData<T> {
     [[vk::offset(16)]]
-    Ptr<T, Access.Immutable> data;
+    Ptr<T> data;
 
     [ForceInline]
-    Ptr<T, Access.Immutable> get() {
+    Ptr<T> get() {
         return data;
     }
 };
 
-[shader("compute")]
-void computeMain() {
+[[vk::push_constant]]
+ComputeData<float> cs;
 
+[shader("compute")]
+[numthreads(64)]
+void computeMain(uint id: SV_DispatchThreadID) {
+    float *p = cs.get();
+
+    p[id] = 42.0;
 }

@@ -5,6 +5,7 @@
 
 #include "include/igpu.h"
 
+#include <cassert>
 #include <fstream>
 #include <string>
 
@@ -29,17 +30,31 @@ int main() {
 
     std::string compute_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/compute.comp.spv");
 
+    gpu::ptr gdata = device->malloc(sizeof(float) * 128);
+    float* hdata = static_cast<float*>(device->deviceToHostAddress(gdata));
+
+    // Set the entire buffer to 0.0, should be 42.0 after dispatch.
+    for (uint32_t i = 0; i < 128u; ++i) {
+        hdata[i] = 0.0f;
+    }
+
     gpu::Pipeline pipeline = device->createComputePipeline(compute_ir);
 
     gpu::CommandList cmd = device->beginRecording(gpu::QueueType::eCompute);
 
     device->setPipeline(cmd, pipeline);
 
-    device->dispatch(cmd, 0, 1, 0, 0);
+    device->dispatch(cmd, gdata, 2, 1, 1);
 
     device->submit(gpu::QueueType::eCompute, { cmd });
 
     device->waitIdle();
+
+    for (uint32_t i = 0; i < 128u; ++i) {
+        assert(hdata[i] == 42.0);
+    }
+
+    device->free(gdata);
 
     device->freePipeline(pipeline);
     

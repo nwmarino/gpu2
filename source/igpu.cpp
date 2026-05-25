@@ -675,11 +675,13 @@ struct Device_T final {
 
     #ifdef IGPU_GLFW
 
-        // Fetch any VK extensions required by GLFW.
-        uint32_t num_exts = 0;
-        const char** exts = glfwGetRequiredInstanceExtensions(&num_exts);
-        for (uint32_t i = 0; i < num_exts; ++i)
-            extensions.push_back(exts[i]);
+        // If a window was provided, fetch any extensions required by GLFW.
+        if (info.window) {
+            uint32_t num_exts = 0;
+            const char** exts = glfwGetRequiredInstanceExtensions(&num_exts);
+            for (uint32_t i = 0; i < num_exts; ++i)
+                extensions.push_back(exts[i]);
+        }
 
     #endif // IGPU_GLFW
 
@@ -726,19 +728,7 @@ struct Device_T final {
                 reinterpret_cast<VkDebugUtilsMessengerEXT*>(&messenger));
         }
 
-    #ifdef IGPU_GLFW
-
-        IGPU_ASSERT(info.window, "Window handle cannot be null!");
-
-        // If GLFW is supported, then we assume the info window belongs to
-        // the library and create the VK surface accordingly.
-        VK_CHECK(vk::Result(glfwCreateWindowSurface(
-            instance, 
-            reinterpret_cast<GLFWwindow*>(info.window), 
-            nullptr, 
-            reinterpret_cast<VkSurfaceKHR*>(&surface))));
-
-    #endif // IGPU_GLFW
+        // Resolve VK functions necessary later.
 
         vkGetDescriptorSetLayoutSize = reinterpret_cast<PFN_vkGetDescriptorSetLayoutSizeEXT>(
             vkGetInstanceProcAddr(instance, "vkGetDescriptorSetLayoutSizeEXT"));
@@ -750,13 +740,31 @@ struct Device_T final {
             vkGetInstanceProcAddr(instance, "vkGetDescriptorEXT"));
 
         IGPU_ASSERT(vkGetDescriptor, "Failed to resolve 'vkGetDescriptorEXT'");
+
+    #ifdef IGPU_GLFW
+
+        // If a window was provided and GLFW is supported, assume the window
+        // belongs to the library and create the VK surface from it.
+        if (info.window) {
+            VK_CHECK(vk::Result(glfwCreateWindowSurface(
+                instance, 
+                reinterpret_cast<GLFWwindow*>(info.window), 
+                nullptr, 
+                reinterpret_cast<VkSurfaceKHR*>(&surface))));
+        }
+
+    #endif // IGPU_GLFW
     }
 
     void VK_CreateDevice(const DeviceInfo& info) {
         std::vector<const char*> extensions = { 
             VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME, 
-            "VK_KHR_swapchain",
         };
+
+        // If a window was provided, use the swapchain extension.
+        if (info.window) {
+            extensions.push_back("VK_KHR_swapchain");
+        }
 
         std::vector<vk::PhysicalDevice> devices = 
             instance.enumeratePhysicalDevices().value;
@@ -911,8 +919,11 @@ struct Device_T final {
     }
 
     void VK_CreateSwapchain(const DeviceInfo& info) {
-        Swapchain& sw = swapchain;
-        sw.frames_in_flight = info.frames_in_flight;
+        swapchain.frames_in_flight = info.frames_in_flight;
+
+        // Skip swapchain creation if no window was provided.
+        if (!info.window)
+            return;
 
         vk::SurfaceCapabilitiesKHR caps = {};
         VK_CHECK(physical_device.getSurfaceCapabilitiesKHR(surface, &caps));
@@ -949,18 +960,18 @@ struct Device_T final {
             &num_images, 
             images.data()));
 
-        sw.textures.resize(num_images);
-        sw.acquire_semaphores.resize(sw.frames_in_flight);
-        sw.present_semaphores.resize(num_images);
+        swapchain.textures.resize(num_images);
+        swapchain.acquire_semaphores.resize(swapchain.frames_in_flight);
+        swapchain.present_semaphores.resize(num_images);
 
         auto sema_info = vk::SemaphoreCreateInfo {};
 
         // Create a binary acquire semaphore for each frame in flight.
-        for (uint32_t i = 0; i < sw.frames_in_flight; ++i) {
+        for (uint32_t i = 0; i < swapchain.frames_in_flight; ++i) {
             VK_CHECK(device.createSemaphore(
                 &sema_info, 
                 nullptr, 
-                &sw.acquire_semaphores[i]));
+                &swapchain.acquire_semaphores[i]));
         }
 
         // Create a borrowed texture and binary present semaphore for each
@@ -980,12 +991,12 @@ struct Device_T final {
                 .dimensions = { info.width, info.height },
             };
 
-            sw.textures[i] = textures.add(texture);
+            swapchain.textures[i] = textures.add(texture);
 
             VK_CHECK(device.createSemaphore(
                 &sema_info, 
                 nullptr, 
-                &sw.present_semaphores[i]));
+                &swapchain.present_semaphores[i]));
         }
 
         // Create a single timeline semaphore.
@@ -1455,6 +1466,9 @@ Texture Device::acquireSwapchainTexture() {
 
     Device_T::Swapchain& swapchain = m_impl->swapchain;
 
+    IGPU_ASSERT(m_impl->swapchain.handle, 
+                "Swapchain was not created! Perhaps a window wasn't provided?");
+
     swapchain.acquire_index = (swapchain.acquire_index + 1) % swapchain.frames_in_flight;
 
     vk::Result result = m_impl->device.acquireNextImageKHR(
@@ -1537,6 +1551,9 @@ void Device::present() {
 
     Device_T::Swapchain& swapchain = m_impl->swapchain;
 
+    IGPU_ASSERT(m_impl->swapchain.handle, 
+                "Swapchain was not created! Perhaps a window wasn't provided?");
+
     vk::Semaphore wait = swapchain.present_semaphores[swapchain.image_index];
 
     VK_CHECK(queue_.queue.presentKHR(vk::PresentInfoKHR {}
@@ -1552,6 +1569,11 @@ void Device::present() {
 void Device::resizeSwapchain(uint32_t width, uint32_t height) {
 #ifdef IGPU_VULKAN
 
+    Device_T::Swapchain& swapchain = m_impl->swapchain;
+
+    IGPU_ASSERT(m_impl->swapchain.handle, 
+                "Swapchain was not created! Perhaps a window wasn't provided?");
+
     // @Todo: Shouldn't abort on failure.
     VK_CHECK(m_impl->device.waitIdle());
 
@@ -1560,7 +1582,6 @@ void Device::resizeSwapchain(uint32_t width, uint32_t height) {
         m_impl->surface, 
         &caps));
 
-    Device_T::Swapchain& swapchain = m_impl->swapchain;
     vk::SwapchainKHR old_swapchain = swapchain.handle;
 
     auto info = vk::SwapchainCreateInfoKHR {}
@@ -1591,8 +1612,6 @@ void Device::resizeSwapchain(uint32_t width, uint32_t height) {
     for (vk::Semaphore sema : swapchain.present_semaphores) {
         m_impl->device.destroySemaphore(sema);
     }
-
-    // @Todo: Don't think timeline semaphore needs to be recreated?
 
     // Fetch the number of swapchain images in use.
     uint32_t num_images = 0;
