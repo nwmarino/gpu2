@@ -490,6 +490,13 @@ public:
     void copyToTexture(void* src, Texture dst, const TextureRegion& region);
     void copyFromTexture(Texture src, void* dst, const TextureRegion& region);
 
+    void blitTexture(CommandList cmd, 
+                     Texture src, 
+                     Texture dst, 
+                     uint32_t src_mip = 0, 
+                     uint32_t dst_mip = 0, 
+                     Filter filter = Filter::eLinear);
+
     void barrier(CommandList cmd, Stage before, Stage after);
 
     void beginRendering(CommandList cmd, const RenderingInfo& info);

@@ -1350,23 +1350,11 @@ ptr Device::malloc(uint64_t size, MemoryType type) {
                   | vk::MemoryPropertyFlagBits::eHostCached;
         break;
     }
-
-    /*
-    std::set<uint32_t> queue_families = {
-        m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)].family,
-        m_impl->queues[static_cast<uint32_t>(QueueType::eCompute)].family,
-        m_impl->queues[static_cast<uint32_t>(QueueType::eTransfer)].family,
-    };
-    */
  
     auto buffer_info = vk::BufferCreateInfo {}
         .setUsage(usage)
         .setSize(static_cast<vk::DeviceSize>(size))
         .setSharingMode(vk::SharingMode::eExclusive);
-    /* @Todo: Maybe add these w/ concurrent? They have to be unique though.
-        .setQueueFamilyIndexCount(queue_families.size())
-        .setPQueueFamilyIndices(queue_families.data());
-    */
 
     // If the request is not asking for device-only memory, then map the 
     // memory at the point of allocation so the host pointer may be
@@ -2418,6 +2406,49 @@ void Device::copyFromTexture(Texture src, void* dst, const TextureRegion& region
         .setSrcImageLayout(vk::ImageLayout::eGeneral)
         .setRegionCount(1)
         .setPRegions(&copy));
+
+#endif // IGPU_VULKAN
+}
+
+void Device::blitTexture(CommandList cmd, 
+                         Texture src, 
+                         Texture dst,
+                         uint32_t src_mip, 
+                         uint32_t dst_mip, 
+                         Filter filter) {
+    CommandList_T& cmd_ = m_impl->lists.get(cmd);
+    Texture_T& src_ = m_impl->textures.get(src);
+    Texture_T& dst_ = m_impl->textures.get(dst);
+
+#ifdef IGPU_VULKAN
+
+    int32_t src_w = std::max(1u, src_.info.dimensions[0] >> src_mip);
+    int32_t src_h = std::max(1u, src_.info.dimensions[1] >> src_mip);
+    int32_t dst_w = std::max(1u, dst_.info.dimensions[0] >> dst_mip);
+    int32_t dst_h = std::max(1u, dst_.info.dimensions[1] >> dst_mip);
+    
+    auto region = vk::ImageBlit2 {}
+        .setSrcOffsets({ vk::Offset3D { 0, 0, 0 }, vk::Offset3D { src_w, src_h, 1 }})
+        .setSrcSubresource(vk::ImageSubresourceLayers {}
+            .setAspectMask(VK_FormatToAspectMask(src_.info.format))
+            .setMipLevel(src_mip)
+            .setBaseArrayLayer(0)
+            .setLayerCount(src_.info.layer_count))
+        .setDstOffsets({ vk::Offset3D { 0, 0, 0 }, vk::Offset3D { dst_w, dst_h, 1 }})
+        .setDstSubresource(vk::ImageSubresourceLayers {}
+            .setAspectMask(VK_FormatToAspectMask(dst_.info.format))
+            .setMipLevel(dst_mip)
+            .setBaseArrayLayer(0)
+            .setLayerCount(dst_.info.layer_count));
+
+    cmd_.buffer.blitImage2(vk::BlitImageInfo2 {}
+        .setSrcImage(src_.image)
+        .setSrcImageLayout(vk::ImageLayout::eGeneral)
+        .setDstImage(dst_.image)
+        .setDstImageLayout(vk::ImageLayout::eGeneral)
+        .setRegionCount(1)
+        .setPRegions(&region)
+        .setFilter(VK_ConvertFilter(filter)));
 
 #endif // IGPU_VULKAN
 }
