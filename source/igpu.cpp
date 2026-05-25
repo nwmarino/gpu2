@@ -602,8 +602,6 @@ struct RenderingDevice_T final {
         std::vector<Texture> textures = {};
         std::vector<vk::Semaphore> acquire_semaphores = {};
         std::vector<vk::Semaphore> present_semaphores = {};
-        vk::Semaphore timeline = nullptr;
-        uint64_t cpu_timeline = 0;
         uint32_t acquire_index = 0;
         uint32_t image_index = 0;
         uint32_t frames_in_flight = 1;
@@ -999,8 +997,6 @@ struct RenderingDevice_T final {
             .setInitialValue(0);
 
         sema_info.setPNext(&timeline_info);
-
-        VK_CHECK(device.createSemaphore(&sema_info, nullptr, &sw.timeline));
     }
 
     void VK_CreateDescriptors(const RenderingDeviceInfo& info) {
@@ -1183,11 +1179,6 @@ struct RenderingDevice_T final {
 
         for (vk::Semaphore sema : swapchain.present_semaphores) {
             device.destroySemaphore(sema);
-        }
-
-        if (swapchain.timeline) {
-            device.destroySemaphore(swapchain.timeline);
-            swapchain.timeline = nullptr;
         }
 
         for (Texture texture : swapchain.textures) {
@@ -1466,18 +1457,7 @@ Texture RenderingDevice::acquireSwapchainTexture() {
 
     RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
 
-    if (swapchain.cpu_timeline >= swapchain.frames_in_flight) {
-        uint64_t value = std::max(0ll, static_cast<int64_t>(swapchain.cpu_timeline) + 1 - swapchain.frames_in_flight);
-        
-        auto wait_info = vk::SemaphoreWaitInfo {}
-            .setSemaphoreCount(1)
-            .setPSemaphores(&swapchain.timeline)
-            .setPValues(&value);
-
-        VK_CHECK(m_impl->device.waitSemaphores(&wait_info, UINT64_MAX));
-    }
-
-    swapchain.acquire_index = (swapchain.cpu_timeline + 1) % swapchain.frames_in_flight;
+    swapchain.acquire_index = (swapchain.acquire_index + 1) % swapchain.frames_in_flight;
 
     vk::Result result = m_impl->device.acquireNextImageKHR(
         swapchain.handle,
@@ -1489,13 +1469,9 @@ Texture RenderingDevice::acquireSwapchainTexture() {
     if (result != vk::Result::eSuccess)
         return InvalidHandle;
 
-    swapchain.cpu_timeline++;
-
     CommandList cmd = beginRecording(QueueType::eGraphics);
-    if (cmd == InvalidHandle) {
-        swapchain.cpu_timeline--;
+    if (cmd == InvalidHandle)
         return InvalidHandle;
-    }
 
     Texture_T& texture_ = m_impl->textures.get(swapchain.textures[swapchain.image_index]);
     Queue_T& queue_ = m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)];
@@ -1529,11 +1505,7 @@ Texture RenderingDevice::acquireSwapchainTexture() {
         .setSemaphore(swapchain.acquire_semaphores[swapchain.acquire_index])
         .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
 
-    std::array<vk::SemaphoreSubmitInfo, 2> signal_infos = {
-        vk::SemaphoreSubmitInfo {}
-            .setSemaphore(swapchain.timeline)
-            .setValue(swapchain.cpu_timeline)
-            .setStageMask(vk::PipelineStageFlagBits2::eAllCommands),
+    std::array<vk::SemaphoreSubmitInfo, 1> signal_infos = {
         vk::SemaphoreSubmitInfo {}
             .setSemaphore(queue_.timeline)
             .setValue(value)
@@ -2066,7 +2038,7 @@ void RenderingDevice::submit(QueueType queue,
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::submitAndPresent(CommandList cmd) {
+void RenderingDevice::submitAndPresent(CommandList cmd, TimelinePair signal) {
     CommandList_T cmd_ = m_impl->lists.remove(cmd);
     Queue_T& queue_ = m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)];
 
@@ -2103,13 +2075,17 @@ void RenderingDevice::submitAndPresent(CommandList cmd) {
     auto buffer_info = vk::CommandBufferSubmitInfo {}
         .setCommandBuffer(cmd_.buffer);
 
-    std::vector<vk::SemaphoreSubmitInfo> signal_infos = {
+    std::array<vk::SemaphoreSubmitInfo, 3> signal_infos = {
         vk::SemaphoreSubmitInfo {}
             .setSemaphore(queue_.timeline)
             .setValue(value)
             .setStageMask(vk::PipelineStageFlagBits2::eAllCommands),
         vk::SemaphoreSubmitInfo {}
             .setSemaphore(swapchain.present_semaphores[image_index])
+            .setStageMask(vk::PipelineStageFlagBits2::eAllGraphics),
+        vk::SemaphoreSubmitInfo {}
+            .setSemaphore(m_impl->semaphores.get(signal.sema).sema)
+            .setValue(signal.value)
             .setStageMask(vk::PipelineStageFlagBits2::eAllGraphics),
     };
 
@@ -2129,27 +2105,6 @@ void RenderingDevice::submitAndPresent(CommandList cmd) {
 #endif // IGPU_VULKAN
 
     present();
-}
-
-Semaphore RenderingDevice::createSemaphore() {
-    Semaphore_T sema = {};
-
-#ifdef IGPU_VULKAN
-
-    auto sema_info = vk::SemaphoreCreateInfo {};
-
-    vk::Result result = m_impl->device.createSemaphore(
-        &sema_info, 
-        nullptr, 
-        &sema.sema);
-
-    // @Todo: Make all invalid handles ~0ull. Pref. use a constexpr.
-    if (result != vk::Result::eSuccess)
-        return ~0ull;
-
-#endif // IGPU_VULKAN
-
-    return m_impl->semaphores.add(sema);
 }
 
 Semaphore RenderingDevice::createSemaphore(uint64_t value) {

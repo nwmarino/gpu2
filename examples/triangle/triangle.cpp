@@ -7,9 +7,10 @@
 
 #include "glfw/glfw3.h"
 
-#include <cassert>
 #include <fstream>
 #include <string>
+
+#define FRAMES_IN_FLIGHT 3
 
 static std::string readFile(const std::string& path) {
     std::ifstream file(path, std::ios::ate | std::ios::binary);
@@ -34,7 +35,7 @@ int main() {
         .setWindow(window)
         .setWidth(800)
         .setHeight(600)
-        .setFramesInFlight(3)
+        .setFramesInFlight(FRAMES_IN_FLIGHT)
         .setEnableValidation(true);
 
     gpu::RenderingDevice* device = gpu::RenderingDevice::Create(device_info);
@@ -80,8 +81,14 @@ int main() {
     scissor.width = 800;
     scissor.height = 600;
 
+    gpu::Semaphore sema = device->createSemaphore(0);
+    uint32_t next_frame = 1;
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+
+        if (next_frame > FRAMES_IN_FLIGHT)
+            device->waitSemaphore(sema, next_frame - FRAMES_IN_FLIGHT);
 
         gpu::CommandList cmd = device->beginRecording(gpu::QueueType::eGraphics);
 
@@ -118,10 +125,12 @@ int main() {
 
         device->endRendering(cmd);
 
-        device->submitAndPresent(cmd);
+        device->submitAndPresent(cmd, { .sema = sema, .value = next_frame++ });
     }
 
     device->waitIdle();
+
+    device->freeSemaphore(sema);
 
     device->freePipeline(pipeline);
 

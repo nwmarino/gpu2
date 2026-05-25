@@ -464,9 +464,8 @@ public:
                 const std::vector<CommandList>& lists,
                 const std::vector<TimelinePair>& signals = {}, 
                 const std::vector<TimelinePair>& wait = {});
-    void submitAndPresent(CommandList cmd);
+    void submitAndPresent(CommandList cmd, TimelinePair signal);
 
-    Semaphore createSemaphore();
     Semaphore createSemaphore(uint64_t value);
     void freeSemaphore(Semaphore sema);
     void waitSemaphore(Semaphore sema, uint64_t value);
