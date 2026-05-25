@@ -125,7 +125,7 @@ int main() {
 
         device->endRendering(cmd);
 
-        device->submitAndPresent(cmd, { .sema = sema, .value = next_frame++ });
+        device->submitAndPresent(cmd, sema, next_frame++);
     }
 
     device->waitIdle();

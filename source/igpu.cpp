@@ -2038,13 +2038,13 @@ void RenderingDevice::submit(QueueType queue,
 #endif // IGPU_VULKAN
 }
 
-void RenderingDevice::submitAndPresent(CommandList cmd, TimelinePair signal) {
+void RenderingDevice::submitAndPresent(CommandList cmd, Semaphore signal, uint64_t value) {
     CommandList_T cmd_ = m_impl->lists.remove(cmd);
     Queue_T& queue_ = m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)];
 
 #ifdef IGPU_VULKAN
 
-    const uint64_t value = ++queue_.submits;
+    const uint64_t submit = ++queue_.submits;
 
     RenderingDevice_T::Swapchain& swapchain = m_impl->swapchain;
     uint32_t image_index = swapchain.image_index;
@@ -2078,14 +2078,14 @@ void RenderingDevice::submitAndPresent(CommandList cmd, TimelinePair signal) {
     std::array<vk::SemaphoreSubmitInfo, 3> signal_infos = {
         vk::SemaphoreSubmitInfo {}
             .setSemaphore(queue_.timeline)
-            .setValue(value)
+            .setValue(submit)
             .setStageMask(vk::PipelineStageFlagBits2::eAllCommands),
         vk::SemaphoreSubmitInfo {}
             .setSemaphore(swapchain.present_semaphores[image_index])
             .setStageMask(vk::PipelineStageFlagBits2::eAllGraphics),
         vk::SemaphoreSubmitInfo {}
-            .setSemaphore(m_impl->semaphores.get(signal.sema).sema)
-            .setValue(signal.value)
+            .setSemaphore(m_impl->semaphores.get(signal).sema)
+            .setValue(value)
             .setStageMask(vk::PipelineStageFlagBits2::eAllGraphics),
     };
 
