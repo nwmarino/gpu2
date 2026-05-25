@@ -40,8 +40,8 @@ int main() {
 
     gpu::RenderingDevice* device = gpu::RenderingDevice::Create(device_info);
 
-    std::string vertex_ir = readFile("C:/Users/nwmar/igpu/examples/triangle/triangle.vert.spv");
-    std::string fragment_ir = readFile("C:/Users/nwmar/igpu/examples/triangle/triangle.frag.spv");
+    std::string vertex_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/triangle.vert.spv");
+    std::string fragment_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/triangle.frag.spv");
 
     std::vector<gpu::AttachmentInfo> atts = {
         gpu::AttachmentInfo {

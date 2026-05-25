@@ -23,16 +23,6 @@ struct FragmentData<T> {
     }
 };
 
-struct ComputeData<T> {
-    [[vk::offset(16)]]
-    Ptr<T, Access.Immutable> data;
-
-    [ForceInline]
-    Ptr<T, Access.Immutable> get() {
-        return data;
-    }
-};
-
 struct VertexOutput {
     float4 position : SV_Position;
 };

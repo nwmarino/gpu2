@@ -40,10 +40,20 @@ target_link_libraries(igpu
 )
 
 add_executable(triangle
-    examples/triangle/triangle.cpp
+    examples/triangle.cpp
 )
 
 target_link_libraries(triangle
+    PRIVATE
+        igpu
+        glfw
+)
+
+add_executable(compute
+    examples/compute.cpp
+)
+
+target_link_libraries(compute
     PRIVATE
         igpu
         glfw
