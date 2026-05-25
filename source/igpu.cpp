@@ -3,7 +3,7 @@
 //  All rights reserved.
 //
 
-#include "include/igpu.h"
+#include "igpu.h"
 
 #include <array>
 #include <cstdint>
