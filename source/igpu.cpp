@@ -646,7 +646,6 @@ struct Device_T final {
     std::mutex memory_mutex;
     std::array<Queue_T, static_cast<uint32_t>(QueueType::eCount)> queues = {};
     std::unordered_map<ptr, AllocationInfo> allocations = {};
-    std::unordered_map<void*, ptr> addresses = {};
 
     Pool<CommandList_T> lists = {};
     Pool<Texture_T> textures = {};
@@ -1251,7 +1250,6 @@ struct Device_T final {
     #endif // IGPU_VULKAN
 
         queues = {};
-        addresses.clear();
 
         IGPU_ASSERT(allocations.empty(), 
                     "Some memory resources have not been destroyed!");
@@ -1313,7 +1311,7 @@ void Device::waitIdle() {
     VK_CHECK(m_impl->device.waitIdle());
 }
 
-ptr Device::malloc(uint64_t size, MemoryType type) {
+ptr Device::malloc(uint64_t size, MemoryType type, void* mapped) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     ptr addr = 0;
@@ -1396,7 +1394,6 @@ ptr Device::malloc(uint64_t size, MemoryType type) {
     // If the memory is not device only, then register the host address.
     if (type != MemoryType::eDevice) {
         alloc.host = alloc_info.pMappedData;
-        m_impl->addresses.emplace(alloc.host, addr);
     } else {
         alloc.host = nullptr;
     }
@@ -1404,6 +1401,8 @@ ptr Device::malloc(uint64_t size, MemoryType type) {
 #endif // IGPU_VULKAN
 
     m_impl->allocations.emplace(addr, alloc);
+
+    mapped = alloc.host;
     return addr;
 }
 
@@ -1427,7 +1426,7 @@ void Device::free(ptr p) {
     m_impl->allocations.erase(it);
 }
 
-void* Device::deviceToHostAddress(ptr p) {
+void* Device::deviceToHostPointer(ptr p) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     // Look for the device address in the allocation table.
@@ -1436,17 +1435,6 @@ void* Device::deviceToHostAddress(ptr p) {
         return it->second.host;
 
     return nullptr;
-}
-
-ptr Device::hostToDeviceAddress(void* p) {
-    std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
-
-    // Look for the host address in the address translation table.
-    auto it = m_impl->addresses.find(p);
-    if (it != m_impl->addresses.end())
-        return it->second;
-    
-    return 0;
 }
 
 Texture Device::acquireSwapchainTexture() {

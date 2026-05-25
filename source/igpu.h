@@ -38,6 +38,14 @@ enum class MemoryType : int32_t {
     eReadback,
 };
 
+/// The different presentation modes for device swapchains.
+enum class Present : int32_t {
+    eImmediate,
+    eFifo,
+    eFifoRelaxed,
+    eMailbox,
+};
+
 enum class LoadOp : int32_t {
     eUnknown,
     eClear,
@@ -221,8 +229,18 @@ using ClearDepthValue = float;
 using ClearStencilValue = uint32_t;
 
 struct TimelinePair final {
-    Semaphore sema = 0;
+    Semaphore sema = gpu::null;
     uint64_t value = 0;
+
+    constexpr TimelinePair& setSemaphore(Semaphore value) {
+        sema = value;
+        return *this;
+    }
+
+    constexpr TimelinePair& setValue(uint64_t value) {
+        value = value;
+        return *this;
+    }
 };
 
 struct TextureInfo final {
@@ -232,7 +250,7 @@ struct TextureInfo final {
     uint8_t layer_count = 1;
     uint8_t mip_count = 1;
     uint8_t sample_count = 1;
-    std::array<uint32_t, 3> dimensions;
+    std::array<uint32_t, 3> dimensions = {};
 };
 
 struct TextureRegion final {
@@ -249,6 +267,31 @@ struct TextureViewInfo final {
     uint8_t layer_count = 1;
     uint8_t base_mip = 0;
     uint8_t mip_count = 1;
+
+    constexpr TextureViewInfo& setFormat(Format value) {
+        format = value;
+        return *this;
+    }
+
+    constexpr TextureViewInfo& setBaseLayer(uint8_t value) {
+        base_layer = value;
+        return *this;
+    }
+
+    constexpr TextureViewInfo& setLayerCount(uint8_t value) {
+        layer_count = value;
+        return *this;
+    }
+
+    constexpr TextureViewInfo& setBaseMip(uint8_t value) {
+        base_mip = value;
+        return *this;
+    }
+
+    constexpr TextureViewInfo& setMipCount(uint8_t value) {
+        mip_count = value;
+        return *this;
+    }
 };
 
 struct TextureDescriptor final {
@@ -338,31 +381,84 @@ struct RasterInfo final {
 };
 
 struct TargetInfo final {
-    Texture texture;
-    TextureViewInfo view;
-    LoadOp load;
-    StoreOp store;
+    Texture texture = gpu::null;
+    TextureViewInfo view = {};
+    LoadOp load = LoadOp::eUnknown;
+    StoreOp store = StoreOp::eUnknown;
 
     union {
         ClearColorValue clear_color;
         ClearDepthValue clear_depth;
         ClearStencilValue clear_stencil;
     };
+
+    constexpr TargetInfo& setTexture(Texture value) {
+        texture = value;
+        return *this;
+    }
+
+    constexpr TargetInfo& setViewInfo(TextureViewInfo value) {
+        view = value;
+        return *this;
+    }
+
+    constexpr TargetInfo& setLoadOp(LoadOp value) {
+        load = value;
+        return *this;
+    }
+
+    constexpr TargetInfo& setStoreOp(StoreOp value) {
+        store = value;
+        return *this;
+    }
+
+    constexpr TargetInfo& setClearColor(ClearColorValue value) {
+        clear_color = value;
+        return *this;
+    }
+
+    constexpr TargetInfo& setClearDepth(ClearDepthValue value) {
+        clear_depth = value;
+        return *this;
+    }
+
+    constexpr TargetInfo& setClearStencil(ClearStencilValue value) {
+        clear_stencil = value;
+        return *this;
+    }
 };
 
 struct RenderingInfo final {
     Rect2D area = {};
     uint8_t layer_count = 1;
-    std::span<TargetInfo> targets = {};
+    std::vector<TargetInfo> targets = {};
     std::optional<TargetInfo> depth = std::nullopt;
     std::optional<TargetInfo> stencil = std::nullopt;
-};
 
-enum class Present : int32_t {
-    eImmediate,
-    eFifo,
-    eFifoRelaxed,
-    eMailbox,
+    constexpr RenderingInfo& setArea(Rect2D value) {
+        area = value;
+        return *this;
+    }
+
+    constexpr RenderingInfo& setLayerCount(uint8_t value) {
+        layer_count = value;
+        return *this;
+    }
+
+    constexpr RenderingInfo& setTargets(const std::vector<TargetInfo>& value) {
+        targets = value;
+        return *this;
+    }
+
+    constexpr RenderingInfo& setDepthTarget(const TargetInfo& value) {
+        depth = value;
+        return *this;
+    }
+
+    constexpr RenderingInfo& setStencilTarget(const TargetInfo& value) {
+        stencil = value;
+        return *this;
+    }
 };
 
 struct DeviceInfo final {
@@ -444,11 +540,12 @@ public:
 
     void waitIdle();
 
-    ptr malloc(uint64_t size, MemoryType type = MemoryType::eDefault);
+    ptr malloc(uint64_t size, 
+               MemoryType type = MemoryType::eDefault, 
+               void* mapped = nullptr);
     void free(ptr p);
 
-    void* deviceToHostAddress(ptr p);
-    ptr hostToDeviceAddress(void* p);
+    void* deviceToHostPointer(ptr p);
 
     Texture acquireSwapchainTexture();
     void present();

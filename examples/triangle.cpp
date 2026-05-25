@@ -63,8 +63,8 @@ int main() {
         float data[7];
     };
 
-    gpu::ptr vs_g = device->malloc(1024);
-    float* vs_h = static_cast<float*>(device->deviceToHostAddress(vs_g));
+    float* vs_h = nullptr;
+    gpu::ptr vs_g = device->malloc(1024, gpu::MemoryType::eDefault, vs_h);
 
     vs_h[0] = -0.5f;
     vs_h[1] =  0.5f;
@@ -99,19 +99,17 @@ int main() {
         view.base_mip = 0;
         view.mip_count = 1;
 
-        gpu::TargetInfo target = {};
-        target.load = gpu::LoadOp::eClear;
-        target.clear_color = { 0.0f, 0.0f, 1.0f }; // Clear to blue.
-        target.store = gpu::StoreOp::eStore;
-        target.texture = device->acquireSwapchainTexture();
-        target.view = view;
-
-        std::vector<gpu::TargetInfo> targets = { target };
-
         gpu::RenderingInfo render_info = {};
         render_info.area = scissor;
         render_info.layer_count = 1;
-        render_info.targets = targets;
+        render_info.targets = {
+            gpu::TargetInfo {}
+                .setTexture(device->acquireSwapchainTexture())
+                .setViewInfo(view)
+                .setLoadOp(gpu::LoadOp::eClear)
+                .setClearColor({ 0.f, 0.f, 1.f })
+                .setStoreOp(gpu::StoreOp::eStore),
+        };
 
         device->beginRendering(cmd, render_info);
 

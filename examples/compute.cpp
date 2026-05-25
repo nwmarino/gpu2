@@ -31,7 +31,7 @@ int main() {
     std::string compute_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/compute.comp.spv");
 
     gpu::ptr gdata = device->malloc(sizeof(float) * 128);
-    float* hdata = static_cast<float*>(device->deviceToHostAddress(gdata));
+    float* hdata = static_cast<float*>(device->deviceToHostPointer(gdata));
 
     // Set the entire buffer to 0.0, should be 42.0 after dispatch.
     for (uint32_t i = 0; i < 128u; ++i) {
