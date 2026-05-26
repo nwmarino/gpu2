@@ -1464,11 +1464,11 @@ Texture Device::acquireSwapchainTexture() {
         &swapchain.image_index);
 
     if (result != vk::Result::eSuccess)
-        return gpu::null;
+        return null;
 
     CommandList cmd = beginRecording(QueueType::eGraphics);
-    if (cmd == gpu::null)
-        return gpu::null;
+    if (cmd == null)
+        return null;
 
     Texture_T& texture_ = m_impl->textures.get(swapchain.textures[swapchain.image_index]);
     Queue_T& queue_ = m_impl->queues[static_cast<uint32_t>(QueueType::eGraphics)];
@@ -1559,8 +1559,7 @@ void Device::resizeSwapchain(uint32_t width, uint32_t height) {
     IGPU_ASSERT(m_impl->swapchain.handle, 
                 "Swapchain was not created! Perhaps a window wasn't provided?");
 
-    // @Todo: Shouldn't abort on failure.
-    VK_CHECK(m_impl->device.waitIdle());
+    waitIdle();
 
     vk::SurfaceCapabilitiesKHR caps = {};
     VK_CHECK(m_impl->physical_device.getSurfaceCapabilitiesKHR(
@@ -1700,12 +1699,12 @@ Texture Device::createTexture(const TextureInfo& info) {
         &alloc_info));
 
     if (result != vk::Result::eSuccess)
-        return 0;
+        return null;
 
     CommandList cmd = beginRecording(QueueType::eTransfer);
     if (!cmd) {
         vmaDestroyImage(m_impl->vma, texture.image, texture.alloc);
-        return 0;
+        return null;
     }
 
     auto barrier = vk::ImageMemoryBarrier2 {}
@@ -1916,7 +1915,7 @@ CommandList Device::beginRecording(QueueType queue) {
         &completed);
 
     if (result != vk::Result::eSuccess)
-        return 0;
+        return null;
 
     while (!queue_.pending.empty() && queue_.pending.front().value <= completed) {
         PendingCommandList cmd = queue_.pending.front();
@@ -1943,7 +1942,7 @@ CommandList Device::beginRecording(QueueType queue) {
         &list.pool);
 
     if (result != vk::Result::eSuccess)
-        return 0;
+        return null;
 
     auto buffer_info = vk::CommandBufferAllocateInfo {}
         .setCommandBufferCount(1)
@@ -1953,7 +1952,7 @@ CommandList Device::beginRecording(QueueType queue) {
     result = m_impl->device.allocateCommandBuffers(&buffer_info, &list.buffer);
     if (result != vk::Result::eSuccess) {
         m_impl->device.destroyCommandPool(list.pool);
-        return 0;
+        return null;
     }
 
     auto begin_info = vk::CommandBufferBeginInfo {}
@@ -1961,7 +1960,7 @@ CommandList Device::beginRecording(QueueType queue) {
 
     if (list.buffer.begin(begin_info) != vk::Result::eSuccess) {
         m_impl->device.destroyCommandPool(list.pool);
-        return 0;
+        return null;
     }
 
 #endif // IGPU_VULKAN
@@ -2028,10 +2027,7 @@ void Device::submit(QueueType queue,
         .setWaitSemaphoreInfoCount(wait_infos.size())
         .setPWaitSemaphoreInfos(wait_infos.data());
 
-    // @Todo: Return custom result value.
-    vk::Result result = queue_.queue.submit2(submit_info);
-    IGPU_ASSERT(result == vk::Result::eSuccess, 
-                "Failed to submit command lists.");
+    VK_CHECK(queue_.queue.submit2(submit_info));
 
     for (PendingCommandList& list : pending) {
         queue_.pending.push_back(std::move(list));
@@ -2126,7 +2122,7 @@ Semaphore Device::createSemaphore(uint64_t value) {
         &sema.sema);
 
     if (result != vk::Result::eSuccess)
-        return 0;
+        return null;
 
 #endif // IGPU_VULKAN
 
@@ -2154,8 +2150,7 @@ void Device::waitSemaphore(Semaphore sema, uint64_t value) {
         .setPSemaphores(&sema_.sema)
         .setValues(value);
 
-    // @Todo: Return custom result value.
-    (void) m_impl->device.waitSemaphores(&wait_info, UINT64_C(1'000'000'000));
+    VK_CHECK(m_impl->device.waitSemaphores(&wait_info, UINT64_MAX));
 
 #endif // IGPU_VULKAN
 }
@@ -2172,7 +2167,7 @@ Pipeline Device::createComputePipeline(std::string_view compute) {
         .setStage(createShaderStage(*m_impl, compute, vk::ShaderStageFlagBits::eCompute));
 
     if (!pipeline_info.stage.module)
-        return 0;
+        return null;
 
     vk::Result result = m_impl->device.createComputePipelines(
         nullptr, 
@@ -2186,7 +2181,7 @@ Pipeline Device::createComputePipeline(std::string_view compute) {
         m_impl->device.destroyShaderModule(pipeline_info.stage.module);
 
     if (result != vk::Result::eSuccess)
-        return 0;
+        return null;
 
 #endif // IGPU_VULKAN
 
@@ -2303,7 +2298,7 @@ Pipeline Device::createGraphicsPipeline(std::string_view vertex,
     }
 
     if (result != vk::Result::eSuccess)
-        return 0;
+        return null;
 
 #endif // IGPU_VULKAN
 
@@ -2322,17 +2317,17 @@ void Device::freePipeline(Pipeline pipeline) {
 }
 
 void Device::copy(CommandList cmd, ptr src, ptr dst, uint32_t size) {
-    CommandList_T cmd_ = m_impl->lists.get(cmd);
+    CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
     IGPU_ASSERT(m_impl->allocations.contains(src), 
                 "Invalid device source address!");
     
-    AllocationInfo src_alloc = m_impl->allocations[src];
+    AllocationInfo& src_alloc = m_impl->allocations[src];
 
     IGPU_ASSERT(m_impl->allocations.contains(dst), 
                 "Invalid device destination address!");
     
-    AllocationInfo dst_alloc = m_impl->allocations[dst];
+    AllocationInfo& dst_alloc = m_impl->allocations[dst];
 
 #ifdef IGPU_VULKAN
 
@@ -2351,8 +2346,6 @@ void Device::copy(CommandList cmd, ptr src, ptr dst, uint32_t size) {
 void Device::copyToTexture(void* src, Texture dst, const TextureRegion& region) {
     Texture_T& texture_ = m_impl->textures.get(dst);
 
-    const TextureInfo& info = texture_.info;
-
 #ifdef IGPU_VULKAN
 
     auto copy = vk::MemoryToImageCopy {}
@@ -2365,22 +2358,19 @@ void Device::copyToTexture(void* src, Texture dst, const TextureRegion& region) 
             .setMipLevel(region.mip)
             .setBaseArrayLayer(region.base_layer)
             .setLayerCount(region.layer_count)
-            .setAspectMask(VK_FormatToAspectMask(info.format)));
+            .setAspectMask(VK_FormatToAspectMask(texture_.info.format)));
 
-    // @Todo: Return custom result value.
-    (void) m_impl->device.copyMemoryToImage(vk::CopyMemoryToImageInfo {}
+    VK_CHECK(m_impl->device.copyMemoryToImage(vk::CopyMemoryToImageInfo {}
         .setDstImage(texture_.image)
         .setDstImageLayout(vk::ImageLayout::eGeneral)
         .setRegionCount(1)
-        .setPRegions(&copy));
+        .setPRegions(&copy)));
 
 #endif // IGPU_VULKAN
 }
 
 void Device::copyFromTexture(Texture src, void* dst, const TextureRegion& region) {
     Texture_T& texture_ = m_impl->textures.get(src);
-
-    const TextureInfo& info = texture_.info;
 
 #ifdef IGPU_VULKAN
 
@@ -2394,14 +2384,13 @@ void Device::copyFromTexture(Texture src, void* dst, const TextureRegion& region
             .setMipLevel(region.mip)
             .setBaseArrayLayer(region.base_layer)
             .setLayerCount(region.layer_count)
-            .setAspectMask(VK_FormatToAspectMask(info.format)));
+            .setAspectMask(VK_FormatToAspectMask(texture_.info.format)));
 
-    // @Todo: Return custom result value.
-    (void) m_impl->device.copyImageToMemory(vk::CopyImageToMemoryInfo {}
+    VK_CHECK(m_impl->device.copyImageToMemory(vk::CopyImageToMemoryInfo {}
         .setSrcImage(texture_.image)
         .setSrcImageLayout(vk::ImageLayout::eGeneral)
         .setRegionCount(1)
-        .setPRegions(&copy));
+        .setPRegions(&copy)));
 
 #endif // IGPU_VULKAN
 }
