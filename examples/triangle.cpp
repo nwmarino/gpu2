@@ -3,25 +3,13 @@
 //  All rights reserved.
 //
 
+#include "common.h"
+
 #include "source/igpu.h"
 
 #include "glfw/glfw3.h"
 
-#include <fstream>
-#include <string>
-
 #define FRAMES_IN_FLIGHT 3
-
-static std::string readFile(const std::string& path) {
-    std::ifstream file(path, std::ios::ate | std::ios::binary);
-    std::streamsize size = file.tellg();
-    std::string contents = "";
-    contents.resize(size);
-    file.seekg(0);
-    file.read(contents.data(), size);
-    file.close();
-    return contents;
-}
 
 int main() {
     glfwInit();
@@ -64,7 +52,7 @@ int main() {
     };
 
     float* vs_h = nullptr;
-    gpu::ptr vs_g = device->malloc(1024, gpu::MemoryType::eDefault, vs_h);
+    gpu::ptr vs_g = device->malloc<float>(1024, gpu::MemoryType::eDefault, &vs_h);
 
     vs_h[0] = -0.5f;
     vs_h[1] =  0.5f;

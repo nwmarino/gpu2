@@ -7,3 +7,4 @@ lib/
 *.ilk
 *.pdb
 *.spv
+.vs/

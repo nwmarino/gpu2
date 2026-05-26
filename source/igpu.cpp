@@ -384,21 +384,28 @@ static vk::BorderColor VK_ConvertBorderColor(BorderColor color) {
     }
 }
 
-static vk::ImageUsageFlagBits VK_ConvertUsage(Usage usage) {
-    switch (usage) {
-    case Usage::eTransferSrc:
-        return vk::ImageUsageFlagBits::eTransferSrc;
-    case Usage::eTransferDst:
-        return vk::ImageUsageFlagBits::eTransferDst;
-    case Usage::eSampled:
-        return vk::ImageUsageFlagBits::eSampled;
-    case Usage::eStorage:
-        return vk::ImageUsageFlagBits::eStorage;
-    case Usage::eColorAttachment:
-        return vk::ImageUsageFlagBits::eColorAttachment;
-    case Usage::eDepthStencilAttachment:
-        return vk::ImageUsageFlagBits::eDepthStencilAttachment;
-    }
+static vk::ImageUsageFlags VK_ConvertUsage(Usage usage) {
+    vk::ImageUsageFlags bits = {};
+
+    if (usage & Usage::eTransferSrc)
+        bits |= vk::ImageUsageFlagBits::eTransferSrc;
+
+    if (usage & Usage::eTransferDst)
+        bits |= vk::ImageUsageFlagBits::eTransferDst;
+
+    if (usage & Usage::eSampled)
+        bits |= vk::ImageUsageFlagBits::eSampled;
+
+    if (usage & Usage::eStorage)
+        bits |= vk::ImageUsageFlagBits::eStorage;
+
+    if (usage & Usage::eColorAttachment)
+        bits |= vk::ImageUsageFlagBits::eColorAttachment;
+
+    if (usage & Usage::eDepthStencilAttachment)
+        bits |= vk::ImageUsageFlagBits::eDepthStencilAttachment;
+
+    return bits;
 }
 
 static vk::SampleCountFlagBits VK_ConvertSampleCount(uint8_t sample_count) {
@@ -934,7 +941,7 @@ struct Device_T final {
             .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
             .setImageExtent({ info.width, info.height })
             .setImageArrayLayers(1)
-            .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
+            .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst)
             .setPreTransform(caps.currentTransform)
             .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
             .setClipped(vk::True)
@@ -1311,7 +1318,7 @@ void Device::waitIdle() {
     VK_CHECK(m_impl->device.waitIdle());
 }
 
-ptr Device::malloc(uint64_t size, MemoryType type, void* mapped) {
+ptr Device::malloc(uint64_t size, MemoryType type, void** mapped) {
     std::lock_guard<std::mutex> lock(m_impl->memory_mutex);
 
     ptr addr = 0;
@@ -1402,7 +1409,9 @@ ptr Device::malloc(uint64_t size, MemoryType type, void* mapped) {
 
     m_impl->allocations.emplace(addr, alloc);
 
-    mapped = alloc.host;
+    if (mapped)
+        *mapped = alloc.host;
+
     return addr;
 }
 
@@ -1666,7 +1675,7 @@ Texture Device::createTexture(const TextureInfo& info) {
     auto image_info = vk::ImageCreateInfo {}
         .setFlags(flags)
         .setFormat(VK_ConvertFormat(info.format))
-        .setExtent({ info.dimensions[0], info.dimensions[1], info.dimensions[3] })
+        .setExtent({ info.dimensions[0], info.dimensions[1], info.dimensions[2] })
         .setImageType(VK_ConvertTextureType(info.type))
         .setMipLevels(info.mip_count)
         .setArrayLayers(info.layer_count)
@@ -2049,7 +2058,6 @@ void Device::submitAndPresent(CommandList cmd, Semaphore signal, uint64_t value)
                        | vk::PipelineStageFlagBits2::eTransfer)
         .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite)
         .setDstStageMask(vk::PipelineStageFlagBits2::eAllGraphics)
-        .setDstAccessMask(vk::AccessFlagBits2::eMemoryRead)
         .setOldLayout(vk::ImageLayout::eGeneral)
         .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
         .setSubresourceRange(vk::ImageSubresourceRange {}
@@ -2394,49 +2402,6 @@ void Device::copyFromTexture(Texture src, void* dst, const TextureRegion& region
         .setSrcImageLayout(vk::ImageLayout::eGeneral)
         .setRegionCount(1)
         .setPRegions(&copy));
-
-#endif // IGPU_VULKAN
-}
-
-void Device::blitTexture(CommandList cmd, 
-                         Texture src, 
-                         Texture dst,
-                         uint32_t src_mip, 
-                         uint32_t dst_mip, 
-                         Filter filter) {
-    CommandList_T& cmd_ = m_impl->lists.get(cmd);
-    Texture_T& src_ = m_impl->textures.get(src);
-    Texture_T& dst_ = m_impl->textures.get(dst);
-
-#ifdef IGPU_VULKAN
-
-    int32_t src_w = std::max(1u, src_.info.dimensions[0] >> src_mip);
-    int32_t src_h = std::max(1u, src_.info.dimensions[1] >> src_mip);
-    int32_t dst_w = std::max(1u, dst_.info.dimensions[0] >> dst_mip);
-    int32_t dst_h = std::max(1u, dst_.info.dimensions[1] >> dst_mip);
-    
-    auto region = vk::ImageBlit2 {}
-        .setSrcOffsets({ vk::Offset3D { 0, 0, 0 }, vk::Offset3D { src_w, src_h, 1 }})
-        .setSrcSubresource(vk::ImageSubresourceLayers {}
-            .setAspectMask(VK_FormatToAspectMask(src_.info.format))
-            .setMipLevel(src_mip)
-            .setBaseArrayLayer(0)
-            .setLayerCount(src_.info.layer_count))
-        .setDstOffsets({ vk::Offset3D { 0, 0, 0 }, vk::Offset3D { dst_w, dst_h, 1 }})
-        .setDstSubresource(vk::ImageSubresourceLayers {}
-            .setAspectMask(VK_FormatToAspectMask(dst_.info.format))
-            .setMipLevel(dst_mip)
-            .setBaseArrayLayer(0)
-            .setLayerCount(dst_.info.layer_count));
-
-    cmd_.buffer.blitImage2(vk::BlitImageInfo2 {}
-        .setSrcImage(src_.image)
-        .setSrcImageLayout(vk::ImageLayout::eGeneral)
-        .setDstImage(dst_.image)
-        .setDstImageLayout(vk::ImageLayout::eGeneral)
-        .setRegionCount(1)
-        .setPRegions(&region)
-        .setFilter(VK_ConvertFilter(filter)));
 
 #endif // IGPU_VULKAN
 }

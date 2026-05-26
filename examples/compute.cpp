@@ -3,24 +3,11 @@
 //  All rights reserved.
 //
 
+#include "common.h"
+
 #include "source/igpu.h"
 
 #include <cassert>
-#include <fstream>
-#include <string>
-
-#define FRAMES_IN_FLIGHT 3
-
-static std::string readFile(const std::string& path) {
-    std::ifstream file(path, std::ios::ate | std::ios::binary);
-    std::streamsize size = file.tellg();
-    std::string contents = "";
-    contents.resize(size);
-    file.seekg(0);
-    file.read(contents.data(), size);
-    file.close();
-    return contents;
-}
 
 int main() {
     auto device_info = gpu::DeviceInfo {}

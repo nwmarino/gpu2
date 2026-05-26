@@ -162,13 +162,23 @@ enum class Factor : int32_t {
 };
 
 enum class Usage : int32_t {
-    eTransferSrc,
-    eTransferDst,
-    eSampled,
-    eStorage,
-    eColorAttachment,
-    eDepthStencilAttachment,
+    eTransferSrc = 1 << 0,
+    eTransferDst = 1 << 1,
+    eSampled = 1 << 2,
+    eStorage = 1 << 3,
+    eColorAttachment = 1 << 4,
+    eDepthStencilAttachment = 1 << 5,
 };
+
+inline constexpr bool operator&(Usage lhs, Usage rhs) {
+    return static_cast<std::underlying_type_t<Usage>>(lhs) 
+        & static_cast<std::underlying_type_t<Usage>>(rhs);
+}
+
+inline constexpr Usage operator|(Usage lhs, Usage rhs) {
+    return static_cast<Usage>(static_cast<std::underlying_type_t<Usage>>(lhs) 
+        | static_cast<std::underlying_type_t<Usage>>(rhs));
+}
 
 enum class Filter : int32_t {
     eNearest,
@@ -251,7 +261,42 @@ struct TextureInfo final {
     uint8_t mip_count = 1;
     uint8_t sample_count = 1;
     std::array<uint32_t, 3> dimensions = {};
-};
+
+    constexpr TextureInfo& setType(TextureType value) {
+        type = value;
+        return *this;
+    }
+
+    constexpr TextureInfo& setFormat(Format value) {
+        format = value;
+        return *this;
+    }
+
+    constexpr TextureInfo& setUsage(Usage value) {
+        usage = value;
+        return *this;
+    }
+
+    constexpr TextureInfo& setLayerCount(uint8_t value) {
+        layer_count = value;
+        return *this;
+    }
+
+    constexpr TextureInfo& setMipCount(uint8_t value) {
+        mip_count = value;
+        return *this;
+    }
+
+    constexpr TextureInfo& setSampleCount(uint8_t value) {
+        sample_count = value;
+        return *this;
+    }
+
+    constexpr TextureInfo& setDimensions(const std::array<uint32_t, 3>& value) {
+        dimensions = value;
+        return *this;
+    }
+}; 
 
 struct TextureRegion final {
     uint8_t mip = 0;
@@ -540,9 +585,16 @@ public:
 
     void waitIdle();
 
+    template<typename T>
     ptr malloc(uint64_t size, 
                MemoryType type = MemoryType::eDefault, 
-               void* mapped = nullptr);
+               T** mapped = nullptr) {
+        return malloc(size, type, reinterpret_cast<void**>(mapped));
+    }
+
+    ptr malloc(uint64_t size, 
+               MemoryType type = MemoryType::eDefault, 
+               void** mapped = nullptr);
     void free(ptr p);
 
     void* deviceToHostPointer(ptr p);
