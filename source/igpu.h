@@ -161,25 +161,6 @@ enum class Factor : int32_t {
     eSrcAlphaSaturate,
 };
 
-enum class Usage : int32_t {
-    eTransferSrc = 1 << 0,
-    eTransferDst = 1 << 1,
-    eSampled = 1 << 2,
-    eStorage = 1 << 3,
-    eColorAttachment = 1 << 4,
-    eDepthStencilAttachment = 1 << 5,
-};
-
-inline constexpr bool operator&(Usage lhs, Usage rhs) {
-    return static_cast<std::underlying_type_t<Usage>>(lhs) 
-        & static_cast<std::underlying_type_t<Usage>>(rhs);
-}
-
-inline constexpr Usage operator|(Usage lhs, Usage rhs) {
-    return static_cast<Usage>(static_cast<std::underlying_type_t<Usage>>(lhs) 
-        | static_cast<std::underlying_type_t<Usage>>(rhs));
-}
-
 enum class Filter : int32_t {
     eNearest,
     eLinear,
@@ -208,6 +189,25 @@ enum class QueueType : uint32_t {
     eTransfer = 2,
     eCount,
 };
+
+enum class Usage : int32_t {
+    eTransferSrc = 1 << 0,
+    eTransferDst = 1 << 1,
+    eSampled = 1 << 2,
+    eStorage = 1 << 3,
+    eColorAttachment = 1 << 4,
+    eDepthStencilAttachment = 1 << 5,
+};
+
+inline constexpr bool operator&(Usage lhs, Usage rhs) {
+    return static_cast<std::underlying_type_t<Usage>>(lhs) 
+        & static_cast<std::underlying_type_t<Usage>>(rhs);
+}
+
+inline constexpr Usage operator|(Usage lhs, Usage rhs) {
+    return static_cast<Usage>(static_cast<std::underlying_type_t<Usage>>(lhs) 
+        | static_cast<std::underlying_type_t<Usage>>(rhs));
+}
 
 struct Rect2D final {
     int32_t x;
@@ -239,7 +239,7 @@ using ClearDepthValue = float;
 using ClearStencilValue = uint32_t;
 
 struct TimelinePair final {
-    Semaphore sema = gpu::null;
+    Semaphore sema = null;
     uint64_t value = 0;
 
     constexpr TimelinePair& setSemaphore(Semaphore value) {
@@ -299,11 +299,36 @@ struct TextureInfo final {
 }; 
 
 struct TextureRegion final {
-    uint8_t mip = 0;
+    uint8_t mip_level = 0;
     uint8_t base_layer = 0;
     uint8_t layer_count = 1;
     std::array<int32_t, 3> offset = {};
     std::array<uint32_t, 3> extent = {};
+
+    constexpr TextureRegion& setMipLevel(uint8_t value) {
+        mip_level = value;
+        return *this;
+    }
+
+    constexpr TextureRegion& setBaseLayer(uint8_t value) {
+        base_layer = value;
+        return *this;
+    }
+
+    constexpr TextureRegion& setLayerCount(uint8_t value) {
+        layer_count = value;
+        return *this;
+    }
+
+    constexpr TextureRegion& setOffset(const std::array<int32_t, 3>& value) {
+        offset = value;
+        return *this;
+    }
+
+    constexpr TextureRegion& setExtent(const std::array<uint32_t, 3>& value) {
+        extent = value;
+        return *this;
+    }
 };
 
 struct TextureViewInfo final {
@@ -361,6 +386,71 @@ struct SamplerInfo final {
     float min_lod = 0.0f;
     float max_lod = 100.0f;
     BorderColor border;
+
+    constexpr SamplerInfo& setMinFilter(Filter value) {
+        min = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setMagFilter(Filter value) {
+        mag = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setMipFilter(Filter value) {
+        mip = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setAddressModeU(AddressMode value) {
+        u = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setAddressModeV(AddressMode value) {
+        v = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setAddressModeW(AddressMode value) {
+        w = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setMipLodBias(float value) {
+        mip_lod_bias = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setEnableAnisotropy(bool value) {
+        enable_anisotropy = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setMaxAnisotropy(float value) {
+        max_anisotropy = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setCompareOp(CompareOp value) {
+        compare = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setMinLod(float value) {
+        min_lod = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setMaxLod(float value) {
+        max_lod = value;
+        return *this;
+    }
+
+    constexpr SamplerInfo& setBorderColor(BorderColor value) {
+        border = value;
+        return *this;
+    }
 };
 
 struct AttachmentInfo final {
@@ -372,6 +462,46 @@ struct AttachmentInfo final {
     Factor src_alpha_factor = Factor::eOne;
     Factor dst_alpha_factor = Factor::eZero;
     uint32_t color_write_mask = 0xFF;
+
+    constexpr AttachmentInfo& setFormat(Format value) {
+        format = value;
+        return *this;
+    }
+
+    constexpr AttachmentInfo& setColorOp(BlendOp value) {
+        color_op = value;
+        return *this;
+    }
+
+    constexpr AttachmentInfo& setSrcColorFactor(Factor value) {
+        src_color_factor = value;
+        return *this;
+    }
+
+    constexpr AttachmentInfo& setDstColorFactor(Factor value) {
+        dst_color_factor = value;
+        return *this;
+    }
+
+    constexpr AttachmentInfo& setAlphaOp(BlendOp value) {
+        alpha_op = value;
+        return *this;
+    }
+
+    constexpr AttachmentInfo& setSrcAlphaColor(Factor value) {
+        src_alpha_factor = value;
+        return *this;
+    }
+
+    constexpr AttachmentInfo& setDstAlphaFactor(Factor value) {
+        dst_alpha_factor = value;
+        return *this;
+    }
+
+    constexpr AttachmentInfo& setColorWriteMask(uint32_t value) {
+        color_write_mask = value;
+        return *this;
+    }
 };
 
 struct RasterInfo final {
@@ -426,7 +556,7 @@ struct RasterInfo final {
 };
 
 struct TargetInfo final {
-    Texture texture = gpu::null;
+    Texture texture = null;
     TextureViewInfo view = {};
     LoadOp load = LoadOp::eUnknown;
     StoreOp store = StoreOp::eUnknown;
@@ -658,6 +788,8 @@ public:
     void setDepthCompareOp(CommandList cmd, CompareOp op);
     void setEnableDepthTest(CommandList cmd, bool value);
     void setEnableDepthWrite(CommandList cmd, bool value);
+
+    void clearTextureColor(CommandList cmd, Texture texture, ClearColorValue color);
 
     void drawInstanced(
         CommandList cmd,

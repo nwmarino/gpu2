@@ -2355,7 +2355,7 @@ void Device::copyToTexture(void* src, Texture dst, const TextureRegion& region) 
         .setImageOffset({ region.offset[0], region.offset[1], region.offset[2] })
         .setImageExtent({ region.extent[0], region.extent[1], region.extent[2] })
         .setImageSubresource(vk::ImageSubresourceLayers {}
-            .setMipLevel(region.mip)
+            .setMipLevel(region.mip_level)
             .setBaseArrayLayer(region.base_layer)
             .setLayerCount(region.layer_count)
             .setAspectMask(VK_FormatToAspectMask(texture_.info.format)));
@@ -2381,7 +2381,7 @@ void Device::copyFromTexture(Texture src, void* dst, const TextureRegion& region
         .setImageOffset({ region.offset[0], region.offset[1], region.offset[2] })
         .setImageExtent({ region.extent[0], region.extent[1], region.extent[2] })
         .setImageSubresource(vk::ImageSubresourceLayers {}
-            .setMipLevel(region.mip)
+            .setMipLevel(region.mip_level)
             .setBaseArrayLayer(region.base_layer)
             .setLayerCount(region.layer_count)
             .setAspectMask(VK_FormatToAspectMask(texture_.info.format)));
@@ -2654,11 +2654,38 @@ void Device::setEnableDepthWrite(CommandList cmd, bool value) {
 #endif // IGPU_VULKAN
 }
 
+void Device::clearTextureColor(CommandList cmd, 
+                               Texture texture, 
+                               ClearColorValue color) {
+    CommandList_T& cmd_ = m_impl->lists.get(cmd);
+    Texture_T& texture_ = m_impl->textures.get(texture);
+
+#ifdef IGPU_VULKAN
+
+    vk::ClearColorValue ccv = {
+        color.r, color.g, color.b, color.a,
+    };
+
+    auto range = vk::ImageSubresourceRange {}
+        .setAspectMask(VK_FormatToAspectMask(texture_.info.format))
+        .setBaseArrayLayer(0)
+        .setLayerCount(texture_.info.layer_count)
+        .setBaseMipLevel(0)
+        .setLevelCount(texture_.info.mip_count);
+
+    cmd_.buffer.clearColorImage(texture_.image, 
+                                vk::ImageLayout::eGeneral, 
+                                ccv, 
+                                range);
+
+#endif // IGPU_VULKAN
+}
+
 void Device::drawInstanced(CommandList cmd,
-                                    ptr vertex, 
-                                    ptr fragment, 
-                                    uint32_t vertices, 
-                                    uint32_t instances) {
+                           ptr vertex, 
+                           ptr fragment, 
+                           uint32_t vertices, 
+                           uint32_t instances) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
@@ -2683,11 +2710,11 @@ void Device::drawInstanced(CommandList cmd,
 }
 
 void Device::drawIndexedInstanced(CommandList cmd,
-                                           ptr vertex,
-                                           ptr fragment,
-                                           ptr index,
-                                           uint32_t indices,
-                                           uint32_t instances) {
+                                  ptr vertex,
+                                  ptr fragment,
+                                  ptr index,
+                                  uint32_t indices,
+                                  uint32_t instances) {
     CommandList_T& cmd_ = m_impl->lists.get(cmd);
 
 #ifdef IGPU_VULKAN
