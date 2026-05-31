@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(igpu VERSION 1.0.0 LANGUAGES CXX)
+project(gpu2 VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 
@@ -18,23 +18,24 @@ find_package(Vulkan REQUIRED)
 
 # Build library.
 
-add_library(igpu
-    source/igpu.cpp
+add_library(gpu2
+    source/gpu2.cpp
+    source/gpu2.vk.cpp
 )
 
-target_include_directories(igpu
+target_include_directories(gpu2
     PUBLIC
         ${CMAKE_SOURCE_DIR}
 )
 
-target_compile_options(igpu
+target_compile_options(gpu2
     PRIVATE
         -g
         -DIGPU_VULKAN
         -DIGPU_GLFW
 )
 
-target_link_libraries(igpu
+target_link_libraries(gpu2
     PRIVATE
         glfw
         Vulkan::Vulkan
@@ -48,7 +49,7 @@ add_executable(triangle
 
 target_link_libraries(triangle
     PRIVATE
-        igpu
+        gpu2
         glfw
 )
 
@@ -60,5 +61,5 @@ add_executable(compute
 
 target_link_libraries(compute
     PRIVATE
-        igpu
+        gpu2
 )

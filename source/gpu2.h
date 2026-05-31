@@ -8,7 +8,6 @@
 
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string_view>
 #include <vector>
 
@@ -20,9 +19,13 @@ using HandleType = uintptr_t;
     using T = HandleType;
 
 #define GPU_DEFINE_ENUM_FLAGS(T) \
-    inline T operator&(T x, T y) { return T(uint32_t(x) & uint32_t(y)); } \
+    inline bool operator&(T x, T y) { return bool(uint32_t(x) & uint32_t(y)); } \
     inline T operator|(T x, T y) { return T(uint32_t(x) | uint32_t(y)); } \
     inline T operator~(T x) { return T(~uint32_t(x)); }
+
+#define VERTEX_STAGE 0
+#define FRAGMENT_STAGE 1
+#define COMPUTE_STAGE 2
 
 using ptr = uintptr_t;
 
@@ -72,6 +75,7 @@ enum class CullMode {
     None,
     Front,
     Back,
+    Both,
 };
 
 enum class FrontFace {
@@ -193,9 +197,8 @@ enum class TextureState {
     Undefined,
     General,
     ShaderRead,
-    ShaderReadWrite,
-    DepthRead,
-    DepthWrite,
+    ColorTarget,
+    DepthStencilTarget,
     TransferSrc,
     TransferDst,
     Present,
@@ -207,15 +210,14 @@ enum class StageFlags : uint32_t {
     RasterColorOut = 1 << 1,
     Vertex         = 1 << 2,
     Fragment       = 1 << 3,
-    ComputeRead    = 1 << 4,
-    ComputeWrite   = 1 << 5,
+    Compute        = 1 << 4,
 };
 
 enum class ShaderStageFlags : uint32_t {
     None     = 0,
-    Vertex   = 1 << 0,
-    Fragment = 1 << 1,
-    Compute  = 1 << 2,
+    Vertex   = 1 << VERTEX_STAGE,
+    Fragment = 1 << FRAGMENT_STAGE,
+    Compute  = 1 << COMPUTE_STAGE,
     All      = Vertex | Fragment | Compute,
 };
 
@@ -248,10 +250,10 @@ struct ClearDepth {
 };
 
 struct Viewport {
-    float x = 0;
-    float y = 0;
-    float width;
-    float height;
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
     float min_depth = 0.0f;
     float max_depth = 1.0f;
 };
@@ -259,8 +261,8 @@ struct Viewport {
 struct Scissor {
     int32_t x = 0;
     int32_t y = 0;
-    uint32_t width;
-    uint32_t height;
+    uint32_t width = 0;
+    uint32_t height = 0;
 };
 
 struct Offset3D {
@@ -279,7 +281,6 @@ struct SwapchainInfo {
     void* window = nullptr;
     uint32_t width = 0;
     uint32_t height = 0;
-    uint32_t buffers = 3;
     Format format = Format::R8G8B8A8_UNORM;
     PresentMode present = PresentMode::Immediate;
 };
@@ -317,7 +318,7 @@ struct SamplerInfo {
 };
 
 struct ShaderInfo {
-    std::span<const uint32_t> bytecode;
+    std::string_view bytecode;
     std::string_view entry = "main";
     ShaderStageFlags stage = ShaderStageFlags::None;
 };
@@ -343,6 +344,7 @@ GPU_DEFINE_HANDLE(Semaphore)
 GPU_DEFINE_HANDLE(Fence)
 
 struct CopyRegion {
+    Offset3D offset = {};
     Dimension3D area = {};
     uint8_t mip_level = 0;
     uint8_t base_layer = 0;
@@ -369,12 +371,13 @@ struct RasterInfo {
     uint8_t sample_count = 1;
     std::vector<AttachmentInfo> attachments = {};
     Format depth = Format::Undefined;
+    CompareOp depth_compare = CompareOp::LessEqual;
     bool depth_test = false;
     bool depth_write = false;
-    CompareOp depth_compare = CompareOp::LessEqual;
+    bool depth_bias_enable = false;
     float depth_bias_clamp = 0.0f;
     float depth_bias_slope = 0.0f;
-    float depth_bias_constant = 0.0f; 
+    float depth_bias_constant = 0.0f;
 };
 
 struct TargetInfo {
@@ -395,6 +398,22 @@ struct RenderInfo {
     std::optional<TargetInfo> depth = {};
 };
 
+struct ClearTextureInfo {
+    Texture texture = null;
+    TextureState state = {};
+    
+    union {
+        ClearColor clear_color;
+        ClearDepth clear_depth;
+    };
+};
+
+template<typename T, typename U>
+struct Pair {
+    T first;
+    U second;
+};
+
 struct DeviceInfo {
     Backend backend = {};
     bool validation = false;
@@ -402,86 +421,89 @@ struct DeviceInfo {
 
 class Device {
 protected:
-    const DeviceInfo m_info = {};
+    const DeviceInfo info = {};
 
-    explicit Device(const DeviceInfo& info) : m_info(info) {}
+    explicit Device(const DeviceInfo& info) : info(info) {}
 
 public:
     /// Returns the information used to create this device.
-    const DeviceInfo& info() const { return m_info; }
+    const DeviceInfo& getInfo() const { return info; }
 
-    virtual void destroy();
+    virtual void destroy() = 0;
 
-    virtual void waitIdle();
-    virtual void waitIdle(QueueType);
+    virtual void waitIdle() = 0;
+    virtual void waitIdle(QueueType) = 0;
 
-    virtual AllocResult malloc(uint64_t size, MemoryType type);
-    virtual AllocResult malloc(uint64_t size, uint64_t align, MemoryType type);
-    virtual void free(ptr);
-    virtual void* deviceToHostPointer(ptr);
+    virtual AllocResult malloc(uint64_t size, MemoryType type) = 0;
+    virtual AllocResult malloc(uint64_t size, uint64_t align, MemoryType type) = 0;
+    virtual void free(ptr) = 0;
+    virtual void* deviceToHostPointer(ptr) = 0;
 
-    virtual Texture createTexture(const TextureInfo&);
-    virtual void freeTexture(Texture);
+    virtual Texture createTexture(const TextureInfo&) = 0;
+    virtual void freeTexture(Texture) = 0;
 
-    virtual Sampler createSampler(const SamplerInfo&);
-    virtual void freeSampler(Sampler);
+    virtual void copyToTexture(void* src, Texture dst, const CopyRegion& region) = 0;
+    virtual void copyFromTexture(Texture src, void* dst, const CopyRegion& region) = 0;
 
-    virtual Shader createShader(const ShaderInfo&);
-    virtual void freeShader(Shader);
+    virtual Sampler createSampler(const SamplerInfo&) = 0;
+    virtual void freeSampler(Sampler) = 0;
 
-    virtual Pipeline createGraphicsPipeline(Shader vertex, Shader fragment, const RasterInfo& info);
-    virtual Pipeline createComputePipeline(Shader compute);
-    void freePipeline(Pipeline);
+    virtual Shader createShader(const ShaderInfo&) = 0;
+    virtual void freeShader(Shader) = 0;
 
-    virtual Swapchain createSwapchain(const SwapchainInfo&);
-    virtual void freeSwapchain(Swapchain);
-    virtual void resizeSwapchain(Swapchain, uint64_t width, uint64_t height);
-    virtual Texture acquireTexture(Swapchain, Fence = null);
-    virtual void present(Swapchain);
+    virtual Pipeline createGraphicsPipeline(Shader vertex, Shader fragment, const RasterInfo& info) = 0;
+    virtual Pipeline createComputePipeline(Shader compute) = 0;
+    virtual void freePipeline(Pipeline) = 0;
 
-    virtual Semaphore createSemaphore();
-    virtual void freeSemaphore(Semaphore);
+    virtual Swapchain createSwapchain(const SwapchainInfo&) = 0;
+    virtual void freeSwapchain(Swapchain) = 0;
+    virtual void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) = 0;
+    virtual Pair<Texture, Semaphore> acquireSwapchainTarget(Swapchain, Semaphore) = 0;
+    virtual void present(Swapchain, Semaphore) = 0;
 
-    virtual Fence createFence();
-    virtual void freeFence(Fence);
-    virtual void waitFence(Fence);
-    virtual void resetFence(Fence);
+    virtual Semaphore createSemaphore() = 0;
+    virtual void freeSemaphore(Semaphore) = 0;
 
-    virtual Descriptor getTextureDescriptor(Texture, TextureViewInfo);
-    virtual Descriptor getRWTextureDescriptor(Texture, TextureViewInfo);
-    virtual Descriptor getSamplerDescriptor(Sampler);
-    virtual void releaseTextureDescriptor(Descriptor);
-    virtual void releaseRWTextureDescriptor(Descriptor);
-    virtual void releaseSamplerDescriptor(Descriptor);
+    virtual Fence createFence() = 0;
+    virtual void freeFence(Fence) = 0;
+    virtual void waitForFences(const std::vector<Fence>&) = 0;
+    virtual void resetFences(const std::vector<Fence>&) = 0;
 
-    virtual CommandList beginRecording(QueueType);
-    virtual void submit(QueueType, 
-                        CommandList, 
-                        Semaphore signal = null, 
-                        Semaphore wait = null);
+    virtual Descriptor getSamplerDescriptor(Sampler) = 0;
+    virtual Descriptor getTextureDescriptor(Texture, TextureViewInfo) = 0;
+    virtual Descriptor getRWTextureDescriptor(Texture, TextureViewInfo) = 0;
+    virtual void releaseSamplerDescriptor(Descriptor) = 0;
+    virtual void releaseTextureDescriptor(Descriptor) = 0;
+    virtual void releaseRWTextureDescriptor(Descriptor) = 0;
 
-    virtual void copy(CommandList, ptr src, ptr dst, uint64_t size);
-    virtual void copyToTexture(CommandList, void* src, Texture dst, const CopyRegion& region);
-    virtual void copyFromTexture(CommandList, Texture src, void* dst, const CopyRegion& region);
-    virtual void clearTextureColor(CommandList, Texture, ClearColor);
-    virtual void clearTextureDepth(CommandList, Texture, ClearDepth);
+    virtual CommandList beginRecording(QueueType) = 0;
+    virtual void submit(
+        QueueType, 
+        CommandList, 
+        Semaphore signal = null, 
+        Semaphore wait = null) = 0;
 
-    virtual void barrier(CommandList, StageFlags before, StageFlags after);
-    virtual void barrier(CommandList, Texture texture, TextureState prev, TextureState next);
+    virtual void copy(CommandList, ptr src, ptr dst, uint64_t size) = 0;
 
-    virtual void beginRendering(CommandList, const RenderInfo&);
-    virtual void endRendering(CommandList);
+    virtual void clearTextureColor(CommandList, const ClearTextureInfo&) = 0;
+    virtual void clearTextureDepth(CommandList, const ClearTextureInfo&) = 0;
 
-    virtual void setPipeline(CommandList, Pipeline);
-    virtual void setViewport(CommandList, Viewport);
-    virtual void setScissor(CommandList, Scissor);
+    virtual void barrier(CommandList, StageFlags before, StageFlags after) = 0;
+    virtual void barrier(CommandList, Texture, TextureState prev, TextureState next) = 0;
+
+    virtual void beginRendering(CommandList, const RenderInfo&) = 0;
+    virtual void endRendering(CommandList) = 0;
+
+    virtual void setPipeline(CommandList, Pipeline) = 0;
+    virtual void setViewport(CommandList, Viewport) = 0;
+    virtual void setScissor(CommandList, Scissor) = 0;
 
     virtual void drawInstanced(
         CommandList, 
         ptr vertex, 
         ptr fragment, 
         uint32_t vertices, 
-        uint32_t instances);
+        uint32_t instances) = 0;
     virtual void drawIndexedInstances(
         CommandList,
         ptr vertex, 
@@ -489,13 +511,13 @@ public:
         ptr index,
         IndexType type,
         uint32_t indices, 
-        uint32_t instances);
+        uint32_t instances) = 0;
     virtual void dispatch(
         CommandList, 
         ptr compute, 
         uint32_t x, 
         uint32_t y, 
-        uint32_t z);
+        uint32_t z) = 0;
 };
 
 Device* createDevice(const DeviceInfo&);

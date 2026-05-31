@@ -6,6 +6,7 @@
 #ifndef GPU2_VULKAN_H_
 #define GPU2_VULKAN_H_
 
+#include "gpu2.h"
 #include "gpu2.in.h"
 
 #include <map>
@@ -16,17 +17,11 @@
 #define VULKAN_HPP_NO_EXCEPTIONS
 #include "vulkan/vulkan.hpp"
 
-#define VMA_IMPLEMENTATION
-#if defined(__clang__)
-    // The VMA header tends to contain a lot of warnings for clang that 
-    // just clutter the building process.
-    #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Weverything"
-    #include "vma.h"
-    #pragma clang diagnostic pop
-#else
-    #include "vma.h"
-#endif // defined(__clang__)
+struct VmaAllocation_T;
+struct VmaAllocator_T;
+
+using VmaAllocation = VmaAllocation_T*;
+using VmaAllocator = VmaAllocator_T*;
 
 #define VK_CHECK(result) \
     do { \
@@ -46,9 +41,9 @@
         } \
     } while(false)
 
-#define TEXTURE_BINDING 0
-#define RW_TEXTURE_BINDING 1
-#define SAMPLER_BINDING 2
+#define SAMPLER_BINDING 0
+#define TEXTURE_BINDING 1
+#define RW_TEXTURE_BINDING 2
 
 namespace gpu {
 
@@ -79,7 +74,12 @@ struct VulkanShader {
 };
 
 struct VulkanSwapchain {
+    SwapchainInfo info = {};
+    vk::SurfaceKHR surface = nullptr;
     vk::SwapchainKHR handle = nullptr;
+    uint32_t index = 0;
+    std::vector<Texture> textures = {};
+    std::vector<Semaphore> semaphores = {};
 };
 
 struct VulkanCommandList {
@@ -90,13 +90,14 @@ struct VulkanCommandList {
 
 struct VulkanPipeline {
     PipelineType type = {};
-    vk::Pipeline pipeline = nullptr;
+    vk::Pipeline handle = nullptr;
 };
 
 struct VulkanQueue {
     QueueType type = {};
     vk::Queue handle = nullptr;
     uint32_t family = 0;
+    std::vector<VulkanCommandList> pending = {};
 };
 
 struct VulkanSemaphore {
@@ -105,6 +106,33 @@ struct VulkanSemaphore {
 
 struct VulkanFence {
     vk::Fence handle = nullptr;
+};
+
+template<typename T>
+class IndexHeap {
+public:
+    using index_type = T;
+
+private:
+    index_type m_bump = 0;
+    std::stack<index_type> m_free = {};
+
+public:
+    IndexHeap(index_type start = 0) : m_bump(start) {}
+
+    index_type alloc() {
+        if (m_free.empty()) {
+            return m_bump++;
+        } else {
+            index_type i = m_free.top();
+            m_free.pop();
+            return i;
+        }
+    }
+
+    void release(index_type i) {
+        m_free.push(i);
+    }
 };
 
 struct VulkanDevice : public Device {
@@ -123,13 +151,13 @@ struct VulkanDevice : public Device {
     std::vector<VulkanQueue> queues = {};
     std::unordered_map<ptr, VulkanAlloc> allocs = {};
 
-    uint32_t num_sampled_images = 0;
-    uint32_t num_storage_images = 0;
-    uint32_t num_samplers = 0;
+    IndexHeap<Descriptor> sampler_descriptors = {};
+    IndexHeap<Descriptor> texture_descriptors = {};
+    IndexHeap<Descriptor> rw_texture_descriptors = {};
 
-    uint32_t sampled_image_size = 0;
-    uint32_t storage_image_size = 0;
-    uint32_t sampler_size = 0;
+    uint32_t num_sampler_descriptors = 0;
+    uint32_t num_texture_descriptors = 0;
+    uint32_t num_rw_texture_descriptors = 0;
 
     Pool<VulkanTexture> textures = {};
     Pool<VulkanSampler> samplers = {};
@@ -142,23 +170,113 @@ struct VulkanDevice : public Device {
 
     explicit VulkanDevice(const DeviceInfo& info);
 
+    void createVulkanCore();
+    void createLogicalDevice();
+    void createMemoryAllocator();
+    void createDescriptorSetup();
+    void createPipelineLayout();
+
+    void cleanupCommands(QueueType);
+
     void destroy() override;
 
     void waitIdle() override;
     void waitIdle(QueueType) override;
 
+    AllocResult malloc(uint64_t size, MemoryType type) override;
+    AllocResult malloc(uint64_t size, uint64_t align, MemoryType type) override;
+    void free(ptr) override;
+    void* deviceToHostPointer(ptr) override;
+
+    Texture createTexture(const TextureInfo&) override;
+    void freeTexture(Texture) override;
+
+    void copyToTexture(void* src, Texture dst, const CopyRegion& region) override;
+    void copyFromTexture(Texture src, void* dst, const CopyRegion& region) override;
+
+    Sampler createSampler(const SamplerInfo&) override;
+    void freeSampler(Sampler) override;
+
     Shader createShader(const ShaderInfo&) override;
     void freeShader(Shader) override;
+
+    Pipeline createGraphicsPipeline(Shader vertex, Shader fragment, const RasterInfo& info) override;
+    Pipeline createComputePipeline(Shader compute) override;
+    void freePipeline(Pipeline) override;
+
+    Swapchain createSwapchain(const SwapchainInfo&) override;
+    void freeSwapchain(Swapchain) override;
+    void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) override;
+    Pair<Texture, Semaphore> acquireSwapchainTarget(Swapchain, Semaphore) override;
+    void present(Swapchain, Semaphore) override;
+
+    Semaphore createSemaphore() override;
+    void freeSemaphore(Semaphore) override;
+
+    Fence createFence() override;
+    void freeFence(Fence) override;
+    void waitForFences(const std::vector<Fence>&) override;
+    void resetFences(const std::vector<Fence>&) override;
+
+    Descriptor getSamplerDescriptor(Sampler) override;
+    Descriptor getTextureDescriptor(Texture, TextureViewInfo) override;
+    Descriptor getRWTextureDescriptor(Texture, TextureViewInfo) override;
+    void releaseSamplerDescriptor(Descriptor) override;
+    void releaseTextureDescriptor(Descriptor) override;
+    void releaseRWTextureDescriptor(Descriptor) override;
+
+    CommandList beginRecording(QueueType) override;
+    void submit(QueueType, 
+                CommandList, 
+                Semaphore signal = null, 
+                Semaphore wait = null) override;
+
+    void copy(CommandList, ptr src, ptr dst, uint64_t size) override;
+
+    void clearTextureColor(CommandList, const ClearTextureInfo&) override;
+    void clearTextureDepth(CommandList, const ClearTextureInfo&) override;
+
+    void barrier(CommandList, StageFlags before, StageFlags after) override;
+    void barrier(CommandList, Texture, TextureState prev, TextureState next) override;
+
+    void beginRendering(CommandList, const RenderInfo&) override;
+    void endRendering(CommandList) override;
+
+    void setPipeline(CommandList, Pipeline) override;
+    void setViewport(CommandList, Viewport) override;
+    void setScissor(CommandList, Scissor) override;
+
+    void drawInstanced(CommandList, 
+                       ptr vertex, 
+                       ptr fragment, 
+                       uint32_t vertices, 
+                       uint32_t instances) override;
+    void drawIndexedInstances(CommandList,
+                              ptr vertex, 
+                              ptr fragment, 
+                              ptr index,
+                              IndexType type,
+                              uint32_t indices, 
+                              uint32_t instances) override;
+    void dispatch(CommandList, 
+                  ptr compute, 
+                  uint32_t x, 
+                  uint32_t y, 
+                  uint32_t z) override;
 };
 
 vk::PipelineBindPoint convert(PipelineType type);
+vk::IndexType convert(IndexType type);
 vk::ImageType convert(TextureType type);
+vk::ImageLayout convert(TextureState state);
 vk::PresentModeKHR convert(PresentMode mode);
 vk::Format convert(Format format);
 vk::Filter convert(Filter filter);
 vk::SamplerAddressMode convert(AddressMode mode);
 vk::BorderColor convert(BorderColor color);
 vk::PrimitiveTopology convert(Topology topology);
+vk::PolygonMode convert(FillMode fill);
+vk::FrontFace convert(FrontFace face);
 vk::AttachmentLoadOp convert(LoadOp op);
 vk::AttachmentStoreOp convert(StoreOp op);
 vk::CompareOp convert(CompareOp op);
@@ -170,9 +288,10 @@ vk::PipelineStageFlags2 convert(StageFlags stage);
 vk::ShaderStageFlags convert(ShaderStageFlags stage);
 vk::ImageUsageFlags convert(UsageFlags usage);
 
+vk::ImageViewType convertViewType(TextureType type);
 vk::SamplerMipmapMode convertMipmapFilter(Filter filter);
 vk::ImageAspectFlags convertAspectMask(Format format);
-vk::SampleCountFlags convertSampleCount(uint32_t samples);
+vk::SampleCountFlagBits convertSampleCount(uint32_t samples);
 
 } // namespace gpu
 

@@ -3,48 +3,56 @@
 //  All rights reserved.
 //
 
-#include "common.h"
-
-#include "source/igpu.h"
+#include "examples/common.h"
+#include "source/gpu2.h"
 
 #include <cassert>
 
 int main() {
-    auto device_info = gpu::DeviceInfo {}
-        .setEnableValidation(true);
+    gpu::DeviceInfo device_info = {};
+    device_info.backend = gpu::Backend::Vulkan;
+    device_info.validation = true;
 
-    gpu::Device* device = gpu::Device::Create(device_info);
+    gpu::Device* device = gpu::createDevice(device_info);
 
-    std::string compute_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/compute.comp.spv");
+    std::string spv = readFile("shaders/compute.comp.spv");
 
-    gpu::ptr gdata = device->malloc(sizeof(float) * 128);
-    float* hdata = static_cast<float*>(device->deviceToHostPointer(gdata));
+    gpu::AllocResult data = device->malloc(
+        128 * sizeof(float), 
+        gpu::MemoryType::Default);
 
     // Set the entire buffer to 0.0, should be 42.0 after dispatch.
     for (uint32_t i = 0; i < 128u; ++i) {
-        hdata[i] = 0.0f;
+        reinterpret_cast<float*>(data.host)[i] = 0.0f;
     }
 
-    gpu::Pipeline pipeline = device->createComputePipeline(compute_ir);
+    gpu::Shader shader = device->createShader(gpu::ShaderInfo {
+        .bytecode = spv,
+        .entry = "main",
+        .stage = gpu::ShaderStageFlags::Compute,
+    });
 
-    gpu::CommandList cmd = device->beginRecording(gpu::QueueType::eCompute);
+    gpu::Pipeline pipeline = device->createComputePipeline(shader);
+
+    gpu::CommandList cmd = device->beginRecording(gpu::QueueType::Compute);
 
     device->setPipeline(cmd, pipeline);
 
-    device->dispatch(cmd, gdata, 2, 1, 1);
+    device->dispatch(cmd, data.device, 2, 1, 1);
 
-    device->submit(gpu::QueueType::eCompute, { cmd });
+    device->submit(gpu::QueueType::Compute, cmd);
 
     device->waitIdle();
 
     for (uint32_t i = 0; i < 128u; ++i) {
-        assert(hdata[i] == 42.0);
+        assert(reinterpret_cast<float*>(data.host)[i] == 42.0);
     }
 
-    device->free(gdata);
+    device->free(data.device);
 
     device->freePipeline(pipeline);
-    
-    delete device;
-}
 
+    device->freeShader(shader);
+    
+    device->destroy();
+}

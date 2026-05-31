@@ -3,9 +3,8 @@
 //  All rights reserved.
 //
 
-#include "common.h"
-
-#include "source/igpu.h"
+#include "examples/common.h"
+#include "source/gpu2.h"
 
 #include "glfw/glfw3.h"
 
@@ -19,84 +18,96 @@ int main() {
 
     GLFWwindow* window = glfwCreateWindow(800, 600, "Triangle", nullptr, nullptr);
 
-    auto device_info = gpu::DeviceInfo {}
-        .setWindow(window)
-        .setWidth(800)
-        .setHeight(600)
-        .setFramesInFlight(FRAMES_IN_FLIGHT)
-        .setEnableValidation(true);
+    gpu::DeviceInfo device_info =  {};
+    device_info.backend = gpu::Backend::Vulkan;
+    device_info.validation = true;
 
-    gpu::Device* device = gpu::Device::Create(device_info);
+    gpu::Device* device = gpu::createDevice(device_info);
 
-    std::string vertex_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/triangle.vert.spv");
-    std::string fragment_ir = readFile("C:/Users/nwmar/igpu/examples/shaders/triangle.frag.spv");
+    gpu::SwapchainInfo swapchain_info = {};
+    swapchain_info.window = window;
+    swapchain_info.width = 800;
+    swapchain_info.height = 600;
 
-    std::vector<gpu::AttachmentInfo> atts = {
+    gpu::Swapchain swapchain = device->createSwapchain(swapchain_info);
+
+    gpu::Shader vertex = device->createShader(gpu::ShaderInfo {
+        .bytecode = readFile("C:/Users/nwmar/igpu/examples/shaders/triangle.vert.spv"),
+        .entry = "main",
+        .stage = gpu::ShaderStageFlags::Vertex,
+    });
+
+    gpu::Shader fragment = device->createShader(gpu::ShaderInfo {
+        .bytecode = readFile("C:/Users/nwmar/igpu/examples/shaders/triangle.frag.spv"),
+        .entry = "main",
+        .stage = gpu::ShaderStageFlags::Fragment,
+    });
+
+    gpu::RasterInfo raster_info = {};
+    raster_info.cull = gpu::CullMode::None;
+    raster_info.fill = gpu::FillMode::Solid;
+    raster_info.attachments = {
         gpu::AttachmentInfo {
-            .format = gpu::Format::eRGBA8Unorm,
+            .format = gpu::Format::R8G8B8A8_UNORM,
         },
     };
 
-    auto raster_info = gpu::RasterInfo {}
-        .setCull(gpu::Cull::eNone)
-        .setFill(gpu::Fill::eFill)
-        .setAttachments(atts);
-
     gpu::Pipeline pipeline = device->createGraphicsPipeline(
-        vertex_ir, 
-        fragment_ir, 
+        vertex, 
+        fragment, 
         raster_info);
 
-    struct Vertex {
-        float data[7];
-    };
+    gpu::AllocResult vertices = device->malloc(6 * sizeof(float), gpu::MemoryType::Default);
 
-    float* vs_h = nullptr;
-    gpu::ptr vs_g = device->malloc<float>(1024, gpu::MemoryType::eDefault, &vs_h);
+    {
+        // Setup vertex data.
 
-    vs_h[0] = -0.5f;
-    vs_h[1] =  0.5f;
-    vs_h[2] =  0.5f;
-    vs_h[3] =  0.5f;
-    vs_h[4] =  0.0f;
-    vs_h[5] = -0.5f;
-    
+        float* p = reinterpret_cast<float*>(vertices.host);
+        p[0] = -0.5f;
+        p[1] =  0.5f;
+        p[2] =  0.5f;
+        p[3] =  0.5f;
+        p[4] =  0.0f;
+        p[5] = -0.5f;
+    }
+
     gpu::Viewport viewport = {};
     viewport.width = 800;
     viewport.height = 600;
 
-    gpu::Rect2D scissor = {};
+    gpu::Scissor scissor = {};
     scissor.width = 800;
     scissor.height = 600;
 
-    gpu::Semaphore sema = device->createSemaphore(0);
-    uint32_t next_frame = 1;
+    gpu::Semaphore sema = device->createSemaphore();
+    gpu::Fence fence = device->createFence();
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
-        if (next_frame > FRAMES_IN_FLIGHT)
-            device->waitSemaphore(sema, next_frame - FRAMES_IN_FLIGHT);
+        gpu::CommandList cmd = device->beginRecording(gpu::QueueType::Graphics);
 
-        gpu::CommandList cmd = device->beginRecording(gpu::QueueType::eGraphics);
+        gpu::Pair<gpu::Texture, gpu::Semaphore> swt = device->acquireSwapchainTarget(swapchain, sema);
+
+        device->barrier(cmd, swt.first, gpu::TextureState::Undefined, gpu::TextureState::ColorTarget);
 
         gpu::TextureViewInfo view = {};
-        view.format = gpu::Format::eRGBA8Unorm;
+        view.format = gpu::Format::R8G8B8A8_UNORM;
         view.base_layer = 0;
         view.layer_count = 1;
         view.base_mip = 0;
         view.mip_count = 1;
 
-        gpu::RenderingInfo render_info = {};
+        gpu::RenderInfo render_info = {};
         render_info.area = scissor;
-        render_info.layer_count = 1;
         render_info.targets = {
-            gpu::TargetInfo {}
-                .setTexture(device->acquireSwapchainTexture())
-                .setViewInfo(view)
-                .setLoadOp(gpu::LoadOp::eClear)
-                .setClearColor({ 0.f, 0.f, 1.f })
-                .setStoreOp(gpu::StoreOp::eStore),
+            gpu::TargetInfo {
+                .texture = swt.first,
+                .view = view,
+                .load = gpu::LoadOp::Clear,
+                .store = gpu::StoreOp::Store,
+                .clear_color = { 0.f, 0.f, 1.f },
+            },
         };
 
         device->beginRendering(cmd, render_info);
@@ -104,25 +115,30 @@ int main() {
         device->setPipeline(cmd, pipeline);
         device->setViewport(cmd, viewport);
         device->setScissor(cmd, scissor);
-        device->setEnableDepthTest(cmd, false);
-        device->setDepthBias(cmd, 0.0f, 0.0f, 0.0f);
 
-        device->drawInstanced(cmd, vs_g, 0, 3, 1);
+        device->drawInstanced(cmd, vertices.device, 0, 3, 1);
 
         device->endRendering(cmd);
 
-        device->submitAndPresent(cmd, sema, next_frame++);
+        device->barrier(cmd, swt.first, gpu::TextureState::ColorTarget, gpu::TextureState::Present);
+
+        device->submit(gpu::QueueType::Graphics, cmd, swt.second, sema);
+        device->present(swapchain, swt.second);
     }
 
     device->waitIdle();
 
     device->freeSemaphore(sema);
+    device->freeFence(fence);
 
     device->freePipeline(pipeline);
+    device->freeShader(vertex);
+    device->freeShader(fragment);
 
-    device->free(vs_g);
+    device->free(vertices.device);
+    device->freeSwapchain(swapchain);
     
-    delete device;
+    device->destroy();
 
     glfwDestroyWindow(window);
     glfwTerminate();

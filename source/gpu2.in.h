@@ -37,6 +37,8 @@ public:
     using value_type = T;
 
 private:
+    static constexpr key_type KeyMask = 1;
+
     std::vector<std::pair<value_type, bool>> m_data = {};
     std::stack<key_type> m_free = {};
 
@@ -46,12 +48,12 @@ public:
     /// Returns the value in this pool with the given key, if it exists.
     const value_type& get(key_type k) const {
         GPU2_ASSERT(contains(k), "Invalid handle!");
-        return m_data[k].first;
+        return m_data[k - KeyMask].first;
     }
 
     value_type& get(key_type k) {
         GPU2_ASSERT(contains(k), "Invalid handle!");
-        return m_data[k].first;
+        return m_data[k - KeyMask].first;
     }
 
     /// Add the given value to this pool, and returns a key to it.
@@ -67,12 +69,14 @@ public:
             m_data[k] = { std::move(v), true };
         }
 
-        return k;
+        return k + KeyMask;
     }
 
     /// Removes and returns the entry with the given key, if it exists.
     value_type remove(key_type k) {
-        IGPU_ASSERT(contains(k), "Invalid handle!");
+        GPU2_ASSERT(contains(k), "Invalid handle!");
+
+        k -= KeyMask;
 
         value_type v = std::move(m_data[k].first);
         m_data[k].second = false;
@@ -83,7 +87,7 @@ public:
 
     /// Returns true if this pool contains an entry for the given key.
     bool contains(key_type k) const {
-        return k < m_data.size() && m_data[k].second;
+        return (k - KeyMask) < m_data.size() && m_data[(k - KeyMask)].second;
     }
 
     /// Returns true if the contents of this pool is empty.
