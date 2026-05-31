@@ -15,8 +15,6 @@ int main() {
 
     gpu::Device* device = gpu::createDevice(device_info);
 
-    std::string spv = readFile("shaders/compute.comp.spv");
-
     gpu::AllocResult data = device->malloc(
         128 * sizeof(float), 
         gpu::MemoryType::Default);
@@ -27,7 +25,7 @@ int main() {
     }
 
     gpu::Shader shader = device->createShader(gpu::ShaderInfo {
-        .bytecode = spv,
+        .bytecode = readFile("shaders/compute.comp.spv"),
         .entry = "main",
         .stage = gpu::ShaderStageFlags::Compute,
     });

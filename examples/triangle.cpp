@@ -8,8 +8,6 @@
 
 #include "glfw/glfw3.h"
 
-#define FRAMES_IN_FLIGHT 3
-
 int main() {
     glfwInit();
 
