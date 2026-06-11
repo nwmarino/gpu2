@@ -15,9 +15,7 @@ int main() {
 
     gpu::Device* device = gpu::createDevice(device_info);
 
-    gpu::AllocResult data = device->malloc(
-        128 * sizeof(float), 
-        gpu::MemoryType::Default);
+    gpu::AllocResult data = device->malloc(128 * sizeof(float), gpu::MemoryType::Upload);
 
     // Set the entire buffer to 0.0, should be 42.0 after dispatch.
     for (uint32_t i = 0; i < 128u; ++i) {

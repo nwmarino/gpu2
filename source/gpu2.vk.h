@@ -77,9 +77,11 @@ struct VulkanSwapchain {
     SwapchainInfo info = {};
     vk::SurfaceKHR surface = nullptr;
     vk::SwapchainKHR handle = nullptr;
-    uint32_t index = 0;
+    uint32_t image_index = 0;
+    uint32_t frame_index = 0;
     std::vector<Texture> textures = {};
-    std::vector<Semaphore> semaphores = {};
+    std::vector<Semaphore> image_semaphores = {};
+    std::vector<Semaphore> frame_semaphores = {};
 };
 
 struct VulkanCommandList {
@@ -98,14 +100,6 @@ struct VulkanQueue {
     vk::Queue handle = nullptr;
     uint32_t family = 0;
     std::vector<VulkanCommandList> pending = {};
-};
-
-struct VulkanSemaphore {
-    vk::Semaphore handle = nullptr;
-};
-
-struct VulkanFence {
-    vk::Fence handle = nullptr;
 };
 
 template<typename T>
@@ -165,8 +159,8 @@ struct VulkanDevice : public Device {
     Pool<VulkanSwapchain> swapchains = {};
     Pool<VulkanCommandList> commands = {};
     Pool<VulkanPipeline> pipelines = {};
-    Pool<VulkanSemaphore> semaphores = {};
-    Pool<VulkanFence> fences = {};
+    Pool<vk::Semaphore> semaphores = {};
+    Pool<vk::Fence> fences = {};
 
     explicit VulkanDevice(const DeviceInfo& info);
 
@@ -180,11 +174,12 @@ struct VulkanDevice : public Device {
 
     void destroy() override;
 
+    Capabilities getCapabilities() override;
+
     void waitIdle() override;
     void waitIdle(QueueType) override;
 
-    AllocResult malloc(uint64_t size, MemoryType type) override;
-    AllocResult malloc(uint64_t size, uint64_t align, MemoryType type) override;
+    AllocResult malloc(uint32_t size, MemoryType type) override;
     void free(ptr) override;
     void* deviceToHostPointer(ptr) override;
 
@@ -204,19 +199,20 @@ struct VulkanDevice : public Device {
     Pipeline createComputePipeline(Shader compute) override;
     void freePipeline(Pipeline) override;
 
-    Swapchain createSwapchain(const SwapchainInfo&) override;
-    void freeSwapchain(Swapchain) override;
-    void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) override;
-    Pair<Texture, Semaphore> acquireSwapchainTarget(Swapchain, Semaphore) override;
-    void present(Swapchain, Semaphore) override;
-
     Semaphore createSemaphore() override;
+    Semaphore createSemaphore(uint64_t value) override;
     void freeSemaphore(Semaphore) override;
 
     Fence createFence() override;
     void freeFence(Fence) override;
-    void waitForFences(const std::vector<Fence>&) override;
-    void resetFences(const std::vector<Fence>&) override;
+    void waitForFences(std::span<Fence>) override;
+    void resetFences(std::span<Fence>) override;
+
+    Swapchain createSwapchain(const SwapchainInfo&) override;
+    void freeSwapchain(Swapchain) override;
+    void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) override;
+    Texture acquireSwapchainTexture(Swapchain) override;
+    void present(Swapchain, CommandList, Fence) override;
 
     Descriptor getSamplerDescriptor(Sampler) override;
     Descriptor getTextureDescriptor(Texture, TextureViewInfo) override;
@@ -226,18 +222,17 @@ struct VulkanDevice : public Device {
     void releaseRWTextureDescriptor(Descriptor) override;
 
     CommandList beginRecording(QueueType) override;
-    void submit(QueueType, 
-                CommandList, 
-                Semaphore signal = null, 
-                Semaphore wait = null) override;
+    void submit(
+        QueueType, 
+        CommandList, 
+        Semaphore signal, 
+        Semaphore wait,
+        Fence fence) override;
 
     void copy(CommandList, ptr src, ptr dst, uint64_t size) override;
 
-    void clearTextureColor(CommandList, const ClearTextureInfo&) override;
-    void clearTextureDepth(CommandList, const ClearTextureInfo&) override;
-
     void barrier(CommandList, StageFlags before, StageFlags after) override;
-    void barrier(CommandList, Texture, TextureState prev, TextureState next) override;
+    void barrier(CommandList, Texture, TextureLayout before, TextureLayout after) override;
 
     void beginRendering(CommandList, const RenderInfo&) override;
     void endRendering(CommandList) override;
@@ -246,29 +241,30 @@ struct VulkanDevice : public Device {
     void setViewport(CommandList, Viewport) override;
     void setScissor(CommandList, Scissor) override;
 
-    void drawInstanced(CommandList, 
-                       ptr vertex, 
-                       ptr fragment, 
-                       uint32_t vertices, 
-                       uint32_t instances) override;
-    void drawIndexedInstances(CommandList,
-                              ptr vertex, 
-                              ptr fragment, 
-                              ptr index,
-                              IndexType type,
-                              uint32_t indices, 
-                              uint32_t instances) override;
-    void dispatch(CommandList, 
-                  ptr compute, 
-                  uint32_t x, 
-                  uint32_t y, 
-                  uint32_t z) override;
+    void drawInstanced(
+        CommandList, 
+        ptr vertex, 
+        ptr fragment, 
+        uint32_t vertices, 
+        uint32_t instances) override;
+    void drawIndexedInstanced(
+        CommandList,
+        ptr vertex, 
+        ptr fragment, 
+        ptr index,
+        uint32_t indices, 
+        uint32_t instances) override;
+    void dispatch(
+        CommandList, 
+        ptr compute, 
+        uint32_t x, 
+        uint32_t y, 
+        uint32_t z) override;
 };
 
 vk::PipelineBindPoint convert(PipelineType type);
-vk::IndexType convert(IndexType type);
 vk::ImageType convert(TextureType type);
-vk::ImageLayout convert(TextureState state);
+vk::ImageLayout convert(TextureLayout layout);
 vk::PresentModeKHR convert(PresentMode mode);
 vk::Format convert(Format format);
 vk::Filter convert(Filter filter);

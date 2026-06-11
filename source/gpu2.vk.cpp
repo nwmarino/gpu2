@@ -7,6 +7,7 @@
 #include "gpu2.vk.h"
 
 #include "GLFW/glfw3.h"
+#include "vulkan/vulkan.hpp"
 
 #include <cstdint>
 #include <set>
@@ -81,17 +82,6 @@ vk::PipelineBindPoint gpu::convert(PipelineType type) {
     }
 }
 
-vk::IndexType gpu::convert(IndexType type) {
-    switch (type) {
-        case IndexType::U8:
-            return vk::IndexType::eUint8;
-        case IndexType::U16:
-            return vk::IndexType::eUint16;
-        case IndexType::U32:
-            return vk::IndexType::eUint32; 
-    }
-}
-
 vk::ImageType gpu::convert(TextureType type) {
     switch (type) {
         case TextureType::D1:
@@ -103,23 +93,23 @@ vk::ImageType gpu::convert(TextureType type) {
     }
 }
 
-vk::ImageLayout gpu::convert(TextureState state) {
-    switch (state) {
-        case TextureState::Undefined:
+vk::ImageLayout gpu::convert(TextureLayout layout) {
+    switch (layout) {
+        case TextureLayout::Undefined:
             return vk::ImageLayout::eUndefined;
-        case TextureState::General:
+        case TextureLayout::General:
             return vk::ImageLayout::eGeneral;
-        case TextureState::ShaderRead:
+        case TextureLayout::ShaderRead:
             return vk::ImageLayout::eShaderReadOnlyOptimal;
-        case TextureState::ColorTarget:
+        case TextureLayout::ColorTarget:
             return vk::ImageLayout::eColorAttachmentOptimal;
-        case TextureState::DepthStencilTarget:
+        case TextureLayout::DepthStencilTarget:
             return vk::ImageLayout::eDepthStencilAttachmentOptimal;
-        case TextureState::TransferSrc:
+        case TextureLayout::TransferSrc:
             return vk::ImageLayout::eTransferSrcOptimal;
-        case TextureState::TransferDst:
+        case TextureLayout::TransferDst:
             return vk::ImageLayout::eTransferDstOptimal;
-        case TextureState::Present:
+        case TextureLayout::Present:
             return vk::ImageLayout::ePresentSrcKHR;
     }
 }
@@ -145,6 +135,10 @@ vk::Format gpu::convert(Format format) {
             return vk::Format::eR8G8B8A8Unorm;
         case Format::R8G8B8A8_SRGB:
             return vk::Format::eR8G8B8A8Srgb;
+        case Format::R16G16_SNORM:
+            return vk::Format::eR16G16Snorm;
+        case Format::R8_UNORM:
+            return vk::Format::eR8Unorm;
         case Format::R32_FLOAT:
             return vk::Format::eR32Sfloat;
         case Format::R32G32_FLOAT:
@@ -447,9 +441,11 @@ vk::ImageAspectFlags gpu::convertAspectMask(Format format) {
             return vk::ImageAspectFlagBits::eNone;
         case Format::R8G8B8A8_UNORM:
         case Format::R8G8B8A8_SRGB:
+        case Format::R16G16_SNORM:
         case Format::R32_FLOAT:
         case Format::R32G32_FLOAT:
         case Format::R32G32B32A32_FLOAT:
+        case Format::R8_UNORM:
         case Format::R16_UINT:
         case Format::R32_UINT:
             return vk::ImageAspectFlagBits::eColor;
@@ -885,6 +881,10 @@ void VulkanDevice::destroy() {
     }
 }
 
+Capabilities VulkanDevice::getCapabilities() {
+    return Capabilities {};
+}
+
 void VulkanDevice::waitIdle() {
     VK_CHECK(device.waitIdle());
 }
@@ -893,11 +893,7 @@ void VulkanDevice::waitIdle(QueueType type) {
     VK_CHECK(queues[static_cast<uint32_t>(type)].handle.waitIdle());
 }
 
-AllocResult VulkanDevice::malloc(uint64_t size, MemoryType type) {
-    return malloc(size, 64, type);
-}
-
-AllocResult VulkanDevice::malloc(uint64_t size, uint64_t align, MemoryType type) {
+AllocResult VulkanDevice::malloc(uint32_t size, MemoryType type) {
     std::lock_guard<std::mutex> lock(memory_mutex);
 
     VulkanAlloc alloc = {};
@@ -914,7 +910,7 @@ AllocResult VulkanDevice::malloc(uint64_t size, uint64_t align, MemoryType type)
     VmaMemoryUsage mem_usage = {};
 
     switch (type) {
-        case MemoryType::Default:
+        case MemoryType::Upload:
             mem_usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
             mem_flags = vk::MemoryPropertyFlagBits::eHostVisible 
                       | vk::MemoryPropertyFlagBits::eHostCoherent;
@@ -994,7 +990,7 @@ void VulkanDevice::free(ptr device) {
 
     VulkanAlloc& alloc = it->second;
 
-    if (alloc.buffer && alloc.alloc) {
+    if (alloc.buffer) {
         vmaDestroyBuffer(allocator, alloc.buffer, alloc.alloc);
         alloc.buffer = nullptr;
         alloc.alloc = nullptr;
@@ -1007,10 +1003,7 @@ void* VulkanDevice::deviceToHostPointer(ptr device) {
     std::lock_guard<std::mutex> lock(memory_mutex);
 
     auto it = allocs.find(device);
-    if (it != allocs.end())
-        return it->second.host;
-
-    return nullptr;
+    return it != allocs.end() ? it->second.host : nullptr;
 }
 
 Texture VulkanDevice::createTexture(const TextureInfo& info) {
@@ -1070,7 +1063,7 @@ Texture VulkanDevice::createTexture(const TextureInfo& info) {
         .setImageMemoryBarrierCount(1)
         .setPImageMemoryBarriers(&barrier));
 
-    submit(QueueType::Transfer, cmd);
+    submit(QueueType::Transfer, cmd, null, null, null);
 
     return textures.add(texture);
 }
@@ -1347,10 +1340,85 @@ void VulkanDevice::freePipeline(Pipeline P) {
     }
 }
 
+Semaphore VulkanDevice::createSemaphore() {
+    vk::Semaphore semaphore = nullptr;
+    
+    auto sema_info = vk::SemaphoreCreateInfo {};
+
+    VK_NULL_ON_ERROR(device.createSemaphore(
+        &sema_info, 
+        nullptr, 
+        &semaphore));
+
+    return semaphores.add(semaphore);
+}
+
+Semaphore VulkanDevice::createSemaphore(uint64_t value) {
+    vk::Semaphore semaphore = nullptr;
+
+    auto type_info = vk::SemaphoreTypeCreateInfo {}
+        .setSemaphoreType(vk::SemaphoreType::eTimeline)
+        .setInitialValue(value);
+
+    auto sema_info = vk::SemaphoreCreateInfo {}
+        .setPNext(&type_info);
+
+    VK_NULL_ON_ERROR(device.createSemaphore(
+        &sema_info, 
+        nullptr, 
+        &semaphore));
+
+    return semaphores.add(semaphore);
+}
+
+void VulkanDevice::freeSemaphore(Semaphore S) {
+    vk::Semaphore semaphore = semaphores.remove(S);
+
+    if (semaphore)
+        device.destroySemaphore(semaphore);
+}
+
+Fence VulkanDevice::createFence() {
+    vk::Fence fence = nullptr;
+
+    auto fence_info = vk::FenceCreateInfo {};
+
+    VK_NULL_ON_ERROR(device.createFence(&fence_info, nullptr, &fence));
+
+    return fences.add(fence);
+}
+
+void VulkanDevice::freeFence(Fence handle) {
+    vk::Fence fence = fences.remove(handle);
+
+    if (fence)
+        device.destroyFence(fence);
+}
+
+void VulkanDevice::waitForFences(std::span<Fence> handles) {
+    std::vector<vk::Fence> fences(handles.size(), nullptr);
+
+    for (std::size_t i = 0; i < handles.size(); ++i) {
+        fences[i] = this->fences.get(handles[i]);
+    }
+
+    VK_CHECK(device.waitForFences(fences, true, UINT64_C(1'000'000'000)));
+}
+
+void VulkanDevice::resetFences(std::span<Fence> handles) {
+    std::vector<vk::Fence> fences(handles.size(), nullptr);
+
+    for (std::size_t i = 0; i < handles.size(); ++i) {
+        fences[i] = this->fences.get(handles[i]);
+    }
+
+    VK_CHECK(device.resetFences(fences));
+}
+
 Swapchain VulkanDevice::createSwapchain(const SwapchainInfo& info) {
     VulkanSwapchain swapchain = {};
     swapchain.info = info;
-    
+
     VK_NULL_ON_ERROR(vk::Result(glfwCreateWindowSurface(
         instance, 
         reinterpret_cast<GLFWwindow*>(info.window), 
@@ -1392,14 +1460,11 @@ Swapchain VulkanDevice::createSwapchain(const SwapchainInfo& info) {
         &num_images, 
         images.data()));
 
-    for (Semaphore semaphore : swapchain.semaphores) {
-        freeSemaphore(semaphore);
-    }
-
     swapchain.textures.resize(num_images);
-    swapchain.semaphores.resize(num_images);
+    swapchain.image_semaphores.resize(num_images);
+    swapchain.frame_semaphores.resize(info.frames_in_flight);
 
-    for (std::size_t i = 0; i < num_images; ++i) {
+    for (uint32_t i = 0; i < num_images; ++i) {
         vk::Image image = images[i];
 
         VulkanTexture texture = {};
@@ -1413,7 +1478,11 @@ Swapchain VulkanDevice::createSwapchain(const SwapchainInfo& info) {
         };
 
         swapchain.textures[i] = textures.add(texture);
-        swapchain.semaphores[i] = createSemaphore();
+        swapchain.image_semaphores[i] = createSemaphore();
+    }
+
+    for (uint32_t i = 0; i < info.frames_in_flight; ++i) {
+        swapchain.frame_semaphores[i] = createSemaphore();
     }
 
     return swapchains.add(swapchain);
@@ -1426,7 +1495,11 @@ void VulkanDevice::freeSwapchain(Swapchain SW) {
         freeTexture(texture);        
     }
 
-    for (Semaphore semaphore : swapchain.semaphores) {
+    for (Semaphore semaphore : swapchain.image_semaphores) {
+        freeSemaphore(semaphore);
+    }
+
+    for (Semaphore semaphore : swapchain.frame_semaphores) {
         freeSemaphore(semaphore);
     }
 
@@ -1488,12 +1561,12 @@ void VulkanDevice::resizeSwapchain(Swapchain SW, uint32_t width, uint32_t height
         freeTexture(texture);
     }
 
-    for (Semaphore semaphore : swapchain.semaphores) {
+    for (Semaphore semaphore : swapchain.image_semaphores) {
         freeSemaphore(semaphore);
     }
  
     swapchain.textures.resize(num_images);
-    swapchain.semaphores.resize(num_images);
+    swapchain.image_semaphores.resize(num_images);
 
     for (std::size_t i = 0; i < num_images; ++i) {
         vk::Image image = images[i];
@@ -1509,108 +1582,70 @@ void VulkanDevice::resizeSwapchain(Swapchain SW, uint32_t width, uint32_t height
         };
 
         swapchain.textures[i] = textures.add(texture);
-        swapchain.semaphores[i] = createSemaphore();
+        swapchain.image_semaphores[i] = createSemaphore();
     }
 }
 
-Pair<Texture, Semaphore> VulkanDevice::acquireSwapchainTarget(Swapchain SW, 
-                                                              Semaphore S) {
-    VulkanSwapchain& swapchain = swapchains.get(SW);
-    VulkanSemaphore& semaphore = semaphores.get(S);
+Texture VulkanDevice::acquireSwapchainTexture(Swapchain S) {
+    VulkanSwapchain& swapchain = swapchains.get(S);
+    vk::Semaphore sema = semaphores.get(swapchain.frame_semaphores[swapchain.frame_index]);
 
-    if (device.acquireNextImageKHR(swapchain.handle, 
-                                   UINT64_MAX, 
-                                   semaphore.handle, 
-                                   nullptr, 
-                                   &swapchain.index) != vk::Result::eSuccess) {
-        return Pair<Texture, Semaphore> {
-            .first = null,
-            .second = null,
-        };
-    }
+    vk::Result result = device.acquireNextImageKHR(
+        swapchain.handle, 
+        UINT64_MAX, 
+        sema, 
+        nullptr, 
+        &swapchain.image_index);
 
-    return Pair<Texture, Semaphore> {
-        swapchain.textures[swapchain.index],
-        swapchain.semaphores[swapchain.index],
-    };
+    return result == vk::Result::eSuccess 
+        ? swapchain.textures[swapchain.image_index]
+        : null;
 }
 
-void VulkanDevice::present(Swapchain SW, Semaphore S) {
-    VulkanSwapchain& swapchain = swapchains.get(SW);
-    VulkanSemaphore& semaphore = semaphores.get(S);
-    
+void VulkanDevice::present(Swapchain S, CommandList CL, Fence F) {
+    VulkanSwapchain& swapchain = swapchains.get(S);
+    vk::Semaphore image_available = semaphores.get(swapchain.image_semaphores[swapchain.image_index]);
+    vk::Semaphore render_finished = semaphores.get(swapchain.frame_semaphores[swapchain.frame_index]);
+    vk::Fence fence = fences.get(F);
     VulkanQueue& queue = queues[static_cast<uint32_t>(QueueType::Graphics)];
 
+    // wait: binary render_finished
+
     VK_CHECK(queue.handle.presentKHR(vk::PresentInfoKHR {}
-        .setSwapchainCount(1)
-        .setPSwapchains(&swapchain.handle)
-        .setWaitSemaphoreCount(1)
-        .setPWaitSemaphores(&semaphore.handle)
-        .setPImageIndices(&swapchain.index)));
-}
+        .setSwapchains(swapchain.handle)
+        .setWaitSemaphores(image_available)
+        .setPImageIndices(&swapchain.image_index)));
 
-Semaphore VulkanDevice::createSemaphore() {
-    VulkanSemaphore sema = {};
-    
-    auto sema_info = vk::SemaphoreCreateInfo {};
+    swapchain.frame_index = (swapchain.frame_index + 1) % swapchain.info.frames_in_flight;
 
-    VK_NULL_ON_ERROR(device.createSemaphore(
-        &sema_info, 
-        nullptr, 
-        &sema.handle));
+    VulkanCommandList cmd = commands.remove(CL);
 
-    return semaphores.add(sema);
-}
+    VK_CHECK(cmd.buffer.end());
 
-void VulkanDevice::freeSemaphore(Semaphore S) {
-    VulkanSemaphore sema = semaphores.remove(S);
+    queue.pending.push_back(cmd);
 
-    if (sema.handle) {
-        device.destroySemaphore(sema.handle);
-        sema.handle = nullptr;
-    }
-}
+    auto buffer_info = vk::CommandBufferSubmitInfo {}
+        .setCommandBuffer(cmd.buffer);
 
-Fence VulkanDevice::createFence() {
-    VulkanFence fence = {};
+    auto signal_info = vk::SemaphoreSubmitInfo {}
+        .setSemaphore(render_finished)
+        .setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
 
-    auto fence_info = vk::FenceCreateInfo {};
+    auto wait_info = vk::SemaphoreSubmitInfo {}
+        .setSemaphore(image_available)
+        .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
 
-    VK_NULL_ON_ERROR(device.createFence(
-        &fence_info, 
-        nullptr, 
-        &fence.handle));
+    auto submit_info = vk::SubmitInfo2 {}
+        .setCommandBufferInfos(buffer_info)
+        .setSignalSemaphoreInfos(signal_info)
+        .setWaitSemaphoreInfos(wait_info);
 
-    return fences.add(fence);
-}
+    VK_CHECK(queue.handle.submit2(1, &submit_info, cmd.fence));
 
-void VulkanDevice::freeFence(Fence handle) {
-    VulkanFence fence = fences.remove(handle);
-
-    if (fence.handle) {
-        device.destroyFence(fence.handle);
-        fence.handle = nullptr;
-    }
-}
-
-void VulkanDevice::waitForFences(const std::vector<Fence>& handles) {
-    std::vector<vk::Fence> fences(handles.size(), nullptr);
-
-    for (std::size_t i = 0; i < handles.size(); ++i) {
-        fences[i] = this->fences.get(handles[i]).handle;
-    }
-
-    VK_CHECK(device.waitForFences(fences, true, UINT64_MAX));
-}
-
-void VulkanDevice::resetFences(const std::vector<Fence>& handles) {
-    std::vector<vk::Fence> fences(handles.size(), nullptr);
-
-    for (std::size_t i = 0; i < handles.size(); ++i) {
-        fences[i] = this->fences.get(handles[i]).handle;
-    }
-
-    VK_CHECK(device.resetFences(fences));
+    // wait 1: binary image available at color att oout
+    // wait 2: timeline semaphore, waiting for prev frame dep (curr_frame - fif)
+    // signal 1: binary render_finished
+    // timeline incremented to curr_frame
 }
 
 Descriptor VulkanDevice::getSamplerDescriptor(Sampler S) {
@@ -1778,10 +1813,12 @@ CommandList VulkanDevice::beginRecording(QueueType type) {
     return commands.add(cmd);
 }
 
-void VulkanDevice::submit(QueueType type, 
-                          CommandList handle, 
-                          Semaphore signal, 
-                          Semaphore wait) {
+void VulkanDevice::submit(
+        QueueType type, 
+        CommandList handle, 
+        Semaphore signal, 
+        Semaphore wait,
+        Fence fence) {
     /*
     
     @Todo
@@ -1806,13 +1843,13 @@ void VulkanDevice::submit(QueueType type,
     
     if (signal) {
         signal_infos.push_back(vk::SemaphoreSubmitInfo {}
-            .setSemaphore(semaphores.get(signal).handle)
+            .setSemaphore(semaphores.get(signal))
             .setStageMask(vk::PipelineStageFlagBits2::eAllGraphics));
     }
 
     if (wait) {
         wait_infos.push_back(vk::SemaphoreSubmitInfo {}
-            .setSemaphore(semaphores.get(wait).handle)
+            .setSemaphore(semaphores.get(wait))
             .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput));
     }
 
@@ -1840,59 +1877,10 @@ void VulkanDevice::copy(CommandList CL, ptr src, ptr dst, uint64_t size) {
         .setPRegions(&region));
 }
 
-void VulkanDevice::clearTextureColor(CommandList CL, 
-                                     const ClearTextureInfo& info) {
-    VulkanCommandList& cmd = commands.get(CL);
-    VulkanTexture& texture = textures.get(info.texture);
-
-    vk::ClearColorValue ccv = {
-        info.clear_color.r, 
-        info.clear_color.g, 
-        info.clear_color.b, 
-        info.clear_color.a,  
-    };
-
-    auto range = vk::ImageSubresourceRange {}
-        .setAspectMask(convertAspectMask(texture.info.format))
-        .setBaseArrayLayer(0)
-        .setLayerCount(1)
-        .setBaseMipLevel(0)
-        .setLevelCount(texture.info.mip_count);
-
-    cmd.buffer.clearColorImage(
-        texture.image, 
-        convert(info.state), 
-        ccv, 
-        range);
-}
-
-void VulkanDevice::clearTextureDepth(CommandList CL, 
-                                     const ClearTextureInfo& info) {
-    VulkanCommandList& cmd = commands.get(CL);
-    VulkanTexture& texture = textures.get(info.texture);
-
-    vk::ClearDepthStencilValue cdsv = {
-        info.clear_depth.depth,
-        info.clear_depth.stencil,
-    };
-
-    auto range = vk::ImageSubresourceRange {}
-        .setAspectMask(convertAspectMask(texture.info.format))
-        .setBaseArrayLayer(0)
-        .setLayerCount(1)
-        .setBaseMipLevel(0)
-        .setLevelCount(texture.info.mip_count);
-
-    cmd.buffer.clearDepthStencilImage(
-        texture.image, 
-        convert(info.state), 
-        cdsv, 
-        range);
-}
-
-void VulkanDevice::barrier(CommandList CL, 
-                           StageFlags before, 
-                           StageFlags after) {
+void VulkanDevice::barrier(
+        CommandList CL, 
+        StageFlags before, 
+        StageFlags after) {
     VulkanCommandList& cmd = commands.get(CL);
 
     auto barrier = vk::MemoryBarrier2 {}
@@ -1903,14 +1891,14 @@ void VulkanDevice::barrier(CommandList CL,
                         | vk::AccessFlagBits2::eMemoryRead);
 
     cmd.buffer.pipelineBarrier2(vk::DependencyInfo {}
-        .setMemoryBarrierCount(1)
-        .setPMemoryBarriers(&barrier));
+        .setMemoryBarriers(barrier));
 }
 
-void VulkanDevice::barrier(CommandList CL, 
-                           Texture T, 
-                           TextureState prev, 
-                           TextureState next) {
+void VulkanDevice::barrier(
+        CommandList CL, 
+        Texture T, 
+        TextureLayout before, 
+        TextureLayout after) {
     VulkanCommandList& cmd = commands.get(CL);
     VulkanTexture& texture = textures.get(T);
 
@@ -1923,8 +1911,8 @@ void VulkanDevice::barrier(CommandList CL,
 
     auto barrier = vk::ImageMemoryBarrier2 {}
         .setImage(texture.image)
-        .setOldLayout(convert(prev))
-        .setNewLayout(convert(next))
+        .setOldLayout(convert(before))
+        .setNewLayout(convert(after))
         .setSubresourceRange(range)
         .setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands)
         .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite)
@@ -1933,8 +1921,7 @@ void VulkanDevice::barrier(CommandList CL,
                         | vk::AccessFlagBits2::eMemoryRead);
 
     cmd.buffer.pipelineBarrier2(vk::DependencyInfo {}
-        .setImageMemoryBarrierCount(1)
-        .setPImageMemoryBarriers(&barrier));
+        .setImageMemoryBarriers(barrier));
 }
 
 void VulkanDevice::beginRendering(CommandList CL, const RenderInfo& info) {
@@ -2074,9 +2061,13 @@ void VulkanDevice::drawInstanced(
     cmd.buffer.draw(vertices, instances, 0, 0);
 }
 
-void VulkanDevice::drawIndexedInstances(
-        CommandList CL, ptr vertex, ptr fragment, ptr index, IndexType type,
-        uint32_t indices, uint32_t instances) {
+void VulkanDevice::drawIndexedInstanced(
+        CommandList CL, 
+        ptr vertex, 
+        ptr fragment, 
+        ptr index, 
+        uint32_t indices, 
+        uint32_t instances) {
     VulkanCommandList& cmd = commands.get(CL);
  
     cmd.buffer.pushConstants(
@@ -2093,12 +2084,16 @@ void VulkanDevice::drawIndexedInstances(
         sizeof(vk::DeviceAddress),
         &fragment);
 
-    cmd.buffer.bindIndexBuffer(allocs[index].buffer, 0, convert(type));
+    cmd.buffer.bindIndexBuffer(allocs[index].buffer, 0, vk::IndexType::eUint32);
     cmd.buffer.drawIndexed(indices, instances, 0, 0, 0);
 }
 
 void VulkanDevice::dispatch(
-        CommandList CL, ptr compute, uint32_t x, uint32_t y, uint32_t z) {
+        CommandList CL, 
+        ptr compute, 
+        uint32_t x, 
+        uint32_t y,
+        uint32_t z) {
     VulkanCommandList& cmd = commands.get(CL);
     
     cmd.buffer.pushConstants(

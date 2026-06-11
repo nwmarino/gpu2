@@ -8,6 +8,8 @@
 
 #include "glfw/glfw3.h"
 
+static constexpr uint32_t FramesInFlight = 3;
+
 int main() {
     glfwInit();
 
@@ -26,6 +28,7 @@ int main() {
     swapchain_info.window = window;
     swapchain_info.width = 800;
     swapchain_info.height = 600;
+    swapchain_info.frames_in_flight = FramesInFlight;
 
     gpu::Swapchain swapchain = device->createSwapchain(swapchain_info);
 
@@ -55,11 +58,10 @@ int main() {
         fragment, 
         raster_info);
 
-    gpu::AllocResult vertices = device->malloc(6 * sizeof(float), gpu::MemoryType::Default);
+    gpu::AllocResult vertices = device->malloc(6 * sizeof(float), gpu::MemoryType::Upload);
 
     {
         // Setup vertex data.
-
         float* p = reinterpret_cast<float*>(vertices.host);
         p[0] = -0.5f;
         p[1] =  0.5f;
@@ -77,17 +79,17 @@ int main() {
     scissor.width = 800;
     scissor.height = 600;
 
-    gpu::Semaphore sema = device->createSemaphore();
-    gpu::Fence fence = device->createFence();
+    gpu::Semaphore sema = device->createSemaphore(0);
+    uint32_t next_frame = 1;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
         gpu::CommandList cmd = device->beginRecording(gpu::QueueType::Graphics);
 
-        gpu::Pair<gpu::Texture, gpu::Semaphore> swt = device->acquireSwapchainTarget(swapchain, sema);
+        gpu::Texture texture = device->acquireSwapchainTexture(swapchain);
 
-        device->barrier(cmd, swt.first, gpu::TextureState::Undefined, gpu::TextureState::ColorTarget);
+        device->barrier(cmd, texture, gpu::TextureLayout::Undefined, gpu::TextureLayout::ColorTarget);
 
         gpu::TextureViewInfo view = {};
         view.format = gpu::Format::R8G8B8A8_UNORM;
@@ -100,7 +102,7 @@ int main() {
         render_info.area = scissor;
         render_info.targets = {
             gpu::TargetInfo {
-                .texture = swt.first,
+                .texture = texture,
                 .view = view,
                 .load = gpu::LoadOp::Clear,
                 .store = gpu::StoreOp::Store,
@@ -118,15 +120,13 @@ int main() {
 
         device->endRendering(cmd);
 
-        device->barrier(cmd, swt.first, gpu::TextureState::ColorTarget, gpu::TextureState::Present);
+        device->barrier(cmd, texture, gpu::TextureLayout::ColorTarget, gpu::TextureLayout::Present);
 
-        device->submit(gpu::QueueType::Graphics, cmd, swt.second, sema);
-        device->present(swapchain, swt.second);
+        device->present(swapchain, cmd, fence);
     }
 
     device->waitIdle();
 
-    device->freeSemaphore(sema);
     device->freeFence(fence);
 
     device->freePipeline(pipeline);

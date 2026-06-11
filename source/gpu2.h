@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -45,15 +46,9 @@ enum class QueueType : uint32_t {
 };
 
 enum class MemoryType {
-    Default,
+    Upload,
     Device,
     Readback,
-};
-
-enum class IndexType {
-    U8,
-    U16,
-    U32,
 };
 
 enum class PresentMode {
@@ -78,23 +73,25 @@ enum class CullMode {
     Both,
 };
 
-enum class FrontFace {
-    Clockwise,
-    CounterClockwise,
-};
-
 enum class FillMode {
     Solid,
     Wireframe,
+};
+
+enum class FrontFace {
+    Clockwise,
+    CounterClockwise,
 };
 
 enum class Format {
     Undefined,
     R8G8B8A8_UNORM,
     R8G8B8A8_SRGB,
+    R16G16_SNORM,
     R32_FLOAT,
     R32G32_FLOAT,
     R32G32B32A32_FLOAT,
+    R8_UNORM,
     R16_UINT,
     R32_UINT,
     D32_FLOAT,
@@ -193,7 +190,7 @@ enum class PipelineType {
     Compute,
 };
 
-enum class TextureState {
+enum class TextureLayout {
     Undefined,
     General,
     ShaderRead,
@@ -279,10 +276,11 @@ struct Dimension3D {
 
 struct SwapchainInfo {
     void* window = nullptr;
-    uint32_t width = 0;
-    uint32_t height = 0;
     Format format = Format::R8G8B8A8_UNORM;
     PresentMode present = PresentMode::Immediate;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t frames_in_flight = 1;
 };
 
 struct TextureInfo {
@@ -389,7 +387,7 @@ struct TargetInfo {
     union {
         ClearColor clear_color;
         ClearDepth clear_depth;
-    };  
+    };
 };
 
 struct RenderInfo {
@@ -398,20 +396,8 @@ struct RenderInfo {
     std::optional<TargetInfo> depth = {};
 };
 
-struct ClearTextureInfo {
-    Texture texture = null;
-    TextureState state = {};
-    
-    union {
-        ClearColor clear_color;
-        ClearDepth clear_depth;
-    };
-};
+struct Capabilities {
 
-template<typename T, typename U>
-struct Pair {
-    T first;
-    U second;
 };
 
 struct DeviceInfo {
@@ -431,11 +417,12 @@ public:
 
     virtual void destroy() = 0;
 
+    virtual Capabilities getCapabilities() = 0;
+
     virtual void waitIdle() = 0;
     virtual void waitIdle(QueueType) = 0;
 
-    virtual AllocResult malloc(uint64_t size, MemoryType type) = 0;
-    virtual AllocResult malloc(uint64_t size, uint64_t align, MemoryType type) = 0;
+    virtual AllocResult malloc(uint32_t size, MemoryType type) = 0;
     virtual void free(ptr) = 0;
     virtual void* deviceToHostPointer(ptr) = 0;
 
@@ -455,19 +442,20 @@ public:
     virtual Pipeline createComputePipeline(Shader compute) = 0;
     virtual void freePipeline(Pipeline) = 0;
 
-    virtual Swapchain createSwapchain(const SwapchainInfo&) = 0;
-    virtual void freeSwapchain(Swapchain) = 0;
-    virtual void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) = 0;
-    virtual Pair<Texture, Semaphore> acquireSwapchainTarget(Swapchain, Semaphore) = 0;
-    virtual void present(Swapchain, Semaphore) = 0;
-
     virtual Semaphore createSemaphore() = 0;
+    virtual Semaphore createSemaphore(uint64_t value) = 0;
     virtual void freeSemaphore(Semaphore) = 0;
 
     virtual Fence createFence() = 0;
     virtual void freeFence(Fence) = 0;
-    virtual void waitForFences(const std::vector<Fence>&) = 0;
-    virtual void resetFences(const std::vector<Fence>&) = 0;
+    virtual void waitForFences(std::span<Fence>) = 0;
+    virtual void resetFences(std::span<Fence>) = 0;
+
+    virtual Swapchain createSwapchain(const SwapchainInfo&) = 0;
+    virtual void freeSwapchain(Swapchain) = 0;
+    virtual void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) = 0;
+    virtual Texture acquireSwapchainTexture(Swapchain) = 0;
+    virtual void present(Swapchain, CommandList, Fence = null) = 0;
 
     virtual Descriptor getSamplerDescriptor(Sampler) = 0;
     virtual Descriptor getTextureDescriptor(Texture, TextureViewInfo) = 0;
@@ -481,15 +469,13 @@ public:
         QueueType, 
         CommandList, 
         Semaphore signal = null, 
-        Semaphore wait = null) = 0;
+        Semaphore wait = null,
+        Fence fence = null) = 0;
 
     virtual void copy(CommandList, ptr src, ptr dst, uint64_t size) = 0;
 
-    virtual void clearTextureColor(CommandList, const ClearTextureInfo&) = 0;
-    virtual void clearTextureDepth(CommandList, const ClearTextureInfo&) = 0;
-
     virtual void barrier(CommandList, StageFlags before, StageFlags after) = 0;
-    virtual void barrier(CommandList, Texture, TextureState prev, TextureState next) = 0;
+    virtual void barrier(CommandList, Texture, TextureLayout before, TextureLayout after) = 0;
 
     virtual void beginRendering(CommandList, const RenderInfo&) = 0;
     virtual void endRendering(CommandList) = 0;
@@ -504,12 +490,11 @@ public:
         ptr fragment, 
         uint32_t vertices, 
         uint32_t instances) = 0;
-    virtual void drawIndexedInstances(
+    virtual void drawIndexedInstanced(
         CommandList,
         ptr vertex, 
         ptr fragment, 
         ptr index,
-        IndexType type,
         uint32_t indices, 
         uint32_t instances) = 0;
     virtual void dispatch(
