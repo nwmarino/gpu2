@@ -1063,7 +1063,7 @@ Texture VulkanDevice::createTexture(const TextureInfo& info) {
         .setImageMemoryBarrierCount(1)
         .setPImageMemoryBarriers(&barrier));
 
-    submit(QueueType::Transfer, cmd, null, null, null);
+    submit(QueueType::Transfer, cmd, null, null);
 
     return textures.add(texture);
 }
@@ -1340,19 +1340,6 @@ void VulkanDevice::freePipeline(Pipeline P) {
     }
 }
 
-Semaphore VulkanDevice::createSemaphore() {
-    vk::Semaphore semaphore = nullptr;
-    
-    auto sema_info = vk::SemaphoreCreateInfo {};
-
-    VK_NULL_ON_ERROR(device.createSemaphore(
-        &sema_info, 
-        nullptr, 
-        &semaphore));
-
-    return semaphores.add(semaphore);
-}
-
 Semaphore VulkanDevice::createSemaphore(uint64_t value) {
     vk::Semaphore semaphore = nullptr;
 
@@ -1378,41 +1365,14 @@ void VulkanDevice::freeSemaphore(Semaphore S) {
         device.destroySemaphore(semaphore);
 }
 
-Fence VulkanDevice::createFence() {
-    vk::Fence fence = nullptr;
+void VulkanDevice::waitSemaphore(Semaphore sema, uint64_t value) {
+    vk::Semaphore vk_sema = semaphores.get(sema);
 
-    auto fence_info = vk::FenceCreateInfo {};
+    auto wait_info = vk::SemaphoreWaitInfo {}
+        .setSemaphores(vk_sema)
+        .setValues(value);
 
-    VK_NULL_ON_ERROR(device.createFence(&fence_info, nullptr, &fence));
-
-    return fences.add(fence);
-}
-
-void VulkanDevice::freeFence(Fence handle) {
-    vk::Fence fence = fences.remove(handle);
-
-    if (fence)
-        device.destroyFence(fence);
-}
-
-void VulkanDevice::waitForFences(std::span<Fence> handles) {
-    std::vector<vk::Fence> fences(handles.size(), nullptr);
-
-    for (std::size_t i = 0; i < handles.size(); ++i) {
-        fences[i] = this->fences.get(handles[i]);
-    }
-
-    VK_CHECK(device.waitForFences(fences, true, UINT64_C(1'000'000'000)));
-}
-
-void VulkanDevice::resetFences(std::span<Fence> handles) {
-    std::vector<vk::Fence> fences(handles.size(), nullptr);
-
-    for (std::size_t i = 0; i < handles.size(); ++i) {
-        fences[i] = this->fences.get(handles[i]);
-    }
-
-    VK_CHECK(device.resetFences(fences));
+    VK_CHECK(device.waitSemaphores(wait_info, UINT64_C(1'000'000'000)));
 }
 
 Swapchain VulkanDevice::createSwapchain(const SwapchainInfo& info) {
@@ -1461,8 +1421,8 @@ Swapchain VulkanDevice::createSwapchain(const SwapchainInfo& info) {
         images.data()));
 
     swapchain.textures.resize(num_images);
-    swapchain.image_semaphores.resize(num_images);
-    swapchain.frame_semaphores.resize(info.frames_in_flight);
+    swapchain.image_available_semas.resize(info.frames_in_flight);
+    swapchain.render_finished_semas.resize(info.frames_in_flight);
 
     for (uint32_t i = 0; i < num_images; ++i) {
         vk::Image image = images[i];
@@ -1478,11 +1438,20 @@ Swapchain VulkanDevice::createSwapchain(const SwapchainInfo& info) {
         };
 
         swapchain.textures[i] = textures.add(texture);
-        swapchain.image_semaphores[i] = createSemaphore();
     }
 
+    auto sema_info = vk::SemaphoreCreateInfo {};
+
     for (uint32_t i = 0; i < info.frames_in_flight; ++i) {
-        swapchain.frame_semaphores[i] = createSemaphore();
+        VK_CHECK(device.createSemaphore(
+            &sema_info, 
+            nullptr, 
+            &swapchain.image_available_semas[i]));
+
+        VK_CHECK(device.createSemaphore(
+            &sema_info, 
+            nullptr, 
+            &swapchain.render_finished_semas[i]));
     }
 
     return swapchains.add(swapchain);
@@ -1495,12 +1464,12 @@ void VulkanDevice::freeSwapchain(Swapchain SW) {
         freeTexture(texture);        
     }
 
-    for (Semaphore semaphore : swapchain.image_semaphores) {
-        freeSemaphore(semaphore);
+    for (vk::Semaphore sema : swapchain.image_available_semas) {
+        device.destroySemaphore(sema);
     }
 
-    for (Semaphore semaphore : swapchain.frame_semaphores) {
-        freeSemaphore(semaphore);
+    for (vk::Semaphore sema : swapchain.render_finished_semas) {
+        device.destroySemaphore(sema);
     }
 
     if (swapchain.handle) {
@@ -1560,13 +1529,9 @@ void VulkanDevice::resizeSwapchain(Swapchain SW, uint32_t width, uint32_t height
     for (Texture texture : swapchain.textures) {
         freeTexture(texture);
     }
-
-    for (Semaphore semaphore : swapchain.image_semaphores) {
-        freeSemaphore(semaphore);
-    }
  
     swapchain.textures.resize(num_images);
-    swapchain.image_semaphores.resize(num_images);
+    swapchain.image_available_semas.resize(num_images);
 
     for (std::size_t i = 0; i < num_images; ++i) {
         vk::Image image = images[i];
@@ -1582,13 +1547,12 @@ void VulkanDevice::resizeSwapchain(Swapchain SW, uint32_t width, uint32_t height
         };
 
         swapchain.textures[i] = textures.add(texture);
-        swapchain.image_semaphores[i] = createSemaphore();
     }
 }
 
 Texture VulkanDevice::acquireSwapchainTexture(Swapchain S) {
     VulkanSwapchain& swapchain = swapchains.get(S);
-    vk::Semaphore sema = semaphores.get(swapchain.frame_semaphores[swapchain.frame_index]);
+    vk::Semaphore sema = swapchain.image_available_semas[swapchain.frame_index];
 
     vk::Result result = device.acquireNextImageKHR(
         swapchain.handle, 
@@ -1602,50 +1566,48 @@ Texture VulkanDevice::acquireSwapchainTexture(Swapchain S) {
         : null;
 }
 
-void VulkanDevice::present(Swapchain S, CommandList CL, Fence F) {
-    VulkanSwapchain& swapchain = swapchains.get(S);
-    vk::Semaphore image_available = semaphores.get(swapchain.image_semaphores[swapchain.image_index]);
-    vk::Semaphore render_finished = semaphores.get(swapchain.frame_semaphores[swapchain.frame_index]);
-    vk::Fence fence = fences.get(F);
+void VulkanDevice::present(Swapchain swapchain, CommandList cmd, Semaphore sema, uint64_t value) {
+    VulkanSwapchain& vk_swapchain = swapchains.get(swapchain);
+    vk::Semaphore vk_sema = semaphores.get(sema);
+    vk::Semaphore image_available = vk_swapchain.image_available_semas[vk_swapchain.frame_index];
+    vk::Semaphore render_finished = vk_swapchain.render_finished_semas[vk_swapchain.frame_index];
     VulkanQueue& queue = queues[static_cast<uint32_t>(QueueType::Graphics)];
 
-    // wait: binary render_finished
-
-    VK_CHECK(queue.handle.presentKHR(vk::PresentInfoKHR {}
-        .setSwapchains(swapchain.handle)
-        .setWaitSemaphores(image_available)
-        .setPImageIndices(&swapchain.image_index)));
-
-    swapchain.frame_index = (swapchain.frame_index + 1) % swapchain.info.frames_in_flight;
-
-    VulkanCommandList cmd = commands.remove(CL);
-
-    VK_CHECK(cmd.buffer.end());
-
-    queue.pending.push_back(cmd);
+    VulkanCommandList vk_cmd = commands.remove(cmd);
+    VK_CHECK(vk_cmd.buffer.end());
+    queue.pending.push_back(vk_cmd);
 
     auto buffer_info = vk::CommandBufferSubmitInfo {}
-        .setCommandBuffer(cmd.buffer);
+        .setCommandBuffer(vk_cmd.buffer);
 
-    auto signal_info = vk::SemaphoreSubmitInfo {}
-        .setSemaphore(render_finished)
-        .setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+    std::array<vk::SemaphoreSubmitInfo, 1> waits = {
+        vk::SemaphoreSubmitInfo {}
+            .setSemaphore(image_available)
+            .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput),
+    };
 
-    auto wait_info = vk::SemaphoreSubmitInfo {}
-        .setSemaphore(image_available)
-        .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    std::array<vk::SemaphoreSubmitInfo, 2> signals = {
+        vk::SemaphoreSubmitInfo {}
+            .setSemaphore(render_finished)
+            .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput),
+        vk::SemaphoreSubmitInfo {}
+            .setSemaphore(vk_sema)
+            .setValue(value),
+    };
 
     auto submit_info = vk::SubmitInfo2 {}
         .setCommandBufferInfos(buffer_info)
-        .setSignalSemaphoreInfos(signal_info)
-        .setWaitSemaphoreInfos(wait_info);
+        .setWaitSemaphoreInfos(waits)
+        .setSignalSemaphoreInfos(signals);
 
-    VK_CHECK(queue.handle.submit2(1, &submit_info, cmd.fence));
+    VK_CHECK(queue.handle.submit2(1, &submit_info, vk_cmd.fence));
 
-    // wait 1: binary image available at color att oout
-    // wait 2: timeline semaphore, waiting for prev frame dep (curr_frame - fif)
-    // signal 1: binary render_finished
-    // timeline incremented to curr_frame
+    VK_CHECK(queue.handle.presentKHR(vk::PresentInfoKHR {}
+        .setSwapchains(vk_swapchain.handle)
+        .setWaitSemaphores(render_finished)
+        .setPImageIndices(&vk_swapchain.image_index)));
+
+    vk_swapchain.frame_index = (vk_swapchain.frame_index + 1) % vk_swapchain.info.frames_in_flight;
 }
 
 Descriptor VulkanDevice::getSamplerDescriptor(Sampler S) {
@@ -1814,54 +1776,42 @@ CommandList VulkanDevice::beginRecording(QueueType type) {
 }
 
 void VulkanDevice::submit(
-        QueueType type, 
+        QueueType queue, 
         CommandList handle, 
         Semaphore signal, 
-        Semaphore wait,
-        Fence fence) {
-    /*
-    
-    @Todo
+        Semaphore wait) {
+    VulkanQueue& vk_queue = queues[static_cast<uint32_t>(queue)];
 
-    If we take in multiple command lists at once, then we can batch the
-    deletion with a single fence rather than attaching the fence to each list.
-    
-    */
-
-    VulkanQueue& queue = queues[static_cast<uint32_t>(type)];
     VulkanCommandList cmd = commands.remove(handle);
-
     VK_CHECK(cmd.buffer.end());
-
-    queue.pending.push_back(cmd);
+    vk_queue.pending.push_back(cmd);
 
     auto buffer_info = vk::CommandBufferSubmitInfo {}
         .setCommandBuffer(cmd.buffer);
 
-    std::vector<vk::SemaphoreSubmitInfo> wait_infos = {};
-    std::vector<vk::SemaphoreSubmitInfo> signal_infos = {};
-    
-    if (signal) {
-        signal_infos.push_back(vk::SemaphoreSubmitInfo {}
-            .setSemaphore(semaphores.get(signal))
-            .setStageMask(vk::PipelineStageFlagBits2::eAllGraphics));
-    }
+    auto submit_info = vk::SubmitInfo2 {}
+        .setCommandBufferInfos(buffer_info);
+
+    auto wait_info = vk::SemaphoreSubmitInfo {};
+    auto signal_info = vk::SemaphoreSubmitInfo {};
 
     if (wait) {
-        wait_infos.push_back(vk::SemaphoreSubmitInfo {}
+        wait_info = vk::SemaphoreSubmitInfo {}
             .setSemaphore(semaphores.get(wait))
-            .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput));
+            .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+
+        submit_info.setWaitSemaphoreInfos(wait_info);
     }
+    
+    if (signal) {
+        signal_info = vk::SemaphoreSubmitInfo {}
+            .setSemaphore(semaphores.get(signal))
+            .setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
 
-    auto submit_info = vk::SubmitInfo2 {}
-        .setCommandBufferInfoCount(1)
-        .setPCommandBufferInfos(&buffer_info)
-        .setSignalSemaphoreInfoCount(signal_infos.size())
-        .setPSignalSemaphoreInfos(signal_infos.data())
-        .setWaitSemaphoreInfoCount(wait_infos.size())
-        .setPWaitSemaphoreInfos(wait_infos.data());
+        submit_info.setSignalSemaphoreInfos(signal_info);
+    }    
 
-    VK_CHECK(queue.handle.submit2(1, &submit_info, cmd.fence));
+    VK_CHECK(vk_queue.handle.submit2(1, &submit_info, cmd.fence));
 }
 
 void VulkanDevice::copy(CommandList CL, ptr src, ptr dst, uint64_t size) {

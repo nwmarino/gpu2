@@ -80,8 +80,8 @@ struct VulkanSwapchain {
     uint32_t image_index = 0;
     uint32_t frame_index = 0;
     std::vector<Texture> textures = {};
-    std::vector<Semaphore> image_semaphores = {};
-    std::vector<Semaphore> frame_semaphores = {};
+    std::vector<vk::Semaphore> image_available_semas = {};
+    std::vector<vk::Semaphore> render_finished_semas = {};
 };
 
 struct VulkanCommandList {
@@ -199,20 +199,15 @@ struct VulkanDevice : public Device {
     Pipeline createComputePipeline(Shader compute) override;
     void freePipeline(Pipeline) override;
 
-    Semaphore createSemaphore() override;
     Semaphore createSemaphore(uint64_t value) override;
     void freeSemaphore(Semaphore) override;
-
-    Fence createFence() override;
-    void freeFence(Fence) override;
-    void waitForFences(std::span<Fence>) override;
-    void resetFences(std::span<Fence>) override;
+    void waitSemaphore(Semaphore, uint64_t value) override;
 
     Swapchain createSwapchain(const SwapchainInfo&) override;
     void freeSwapchain(Swapchain) override;
     void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) override;
     Texture acquireSwapchainTexture(Swapchain) override;
-    void present(Swapchain, CommandList, Fence) override;
+    void present(Swapchain, CommandList, Semaphore, uint64_t value) override;
 
     Descriptor getSamplerDescriptor(Sampler) override;
     Descriptor getTextureDescriptor(Texture, TextureViewInfo) override;
@@ -226,8 +221,7 @@ struct VulkanDevice : public Device {
         QueueType, 
         CommandList, 
         Semaphore signal, 
-        Semaphore wait,
-        Fence fence) override;
+        Semaphore wait) override;
 
     void copy(CommandList, ptr src, ptr dst, uint64_t size) override;
 

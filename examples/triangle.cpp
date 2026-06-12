@@ -85,6 +85,9 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
+        if (next_frame > FramesInFlight)
+            device->waitSemaphore(sema, next_frame - FramesInFlight);
+
         gpu::CommandList cmd = device->beginRecording(gpu::QueueType::Graphics);
 
         gpu::Texture texture = device->acquireSwapchainTexture(swapchain);
@@ -122,12 +125,12 @@ int main() {
 
         device->barrier(cmd, texture, gpu::TextureLayout::ColorTarget, gpu::TextureLayout::Present);
 
-        device->present(swapchain, cmd, fence);
+        device->present(swapchain, cmd, sema, next_frame++);
     }
 
     device->waitIdle();
 
-    device->freeFence(fence);
+    device->freeSemaphore(sema);
 
     device->freePipeline(pipeline);
     device->freeShader(vertex);

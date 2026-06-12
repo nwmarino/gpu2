@@ -8,7 +8,6 @@
 
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string_view>
 #include <vector>
 
@@ -339,7 +338,6 @@ GPU_DEFINE_HANDLE(Swapchain)
 GPU_DEFINE_HANDLE(CommandList)
 GPU_DEFINE_HANDLE(Pipeline)
 GPU_DEFINE_HANDLE(Semaphore)
-GPU_DEFINE_HANDLE(Fence)
 
 struct CopyRegion {
     Offset3D offset = {};
@@ -442,20 +440,15 @@ public:
     virtual Pipeline createComputePipeline(Shader compute) = 0;
     virtual void freePipeline(Pipeline) = 0;
 
-    virtual Semaphore createSemaphore() = 0;
     virtual Semaphore createSemaphore(uint64_t value) = 0;
     virtual void freeSemaphore(Semaphore) = 0;
-
-    virtual Fence createFence() = 0;
-    virtual void freeFence(Fence) = 0;
-    virtual void waitForFences(std::span<Fence>) = 0;
-    virtual void resetFences(std::span<Fence>) = 0;
+    virtual void waitSemaphore(Semaphore, uint64_t value) = 0;
 
     virtual Swapchain createSwapchain(const SwapchainInfo&) = 0;
     virtual void freeSwapchain(Swapchain) = 0;
     virtual void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) = 0;
     virtual Texture acquireSwapchainTexture(Swapchain) = 0;
-    virtual void present(Swapchain, CommandList, Fence = null) = 0;
+    virtual void present(Swapchain, CommandList, Semaphore, uint64_t value) = 0;
 
     virtual Descriptor getSamplerDescriptor(Sampler) = 0;
     virtual Descriptor getTextureDescriptor(Texture, TextureViewInfo) = 0;
@@ -469,8 +462,7 @@ public:
         QueueType, 
         CommandList, 
         Semaphore signal = null, 
-        Semaphore wait = null,
-        Fence fence = null) = 0;
+        Semaphore wait = null) = 0;
 
     virtual void copy(CommandList, ptr src, ptr dst, uint64_t size) = 0;
 
