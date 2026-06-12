@@ -273,6 +273,17 @@ struct Dimension3D {
     uint32_t z = 0;
 };
 
+/// The result of a device memory allocation.
+struct AllocResult {
+    ptr device = null;
+    void* host = nullptr;
+
+    /// Returns true if this allocation is valid.
+    bool valid() const {
+        return device != null;
+    }
+};
+
 struct SwapchainInfo {
     void* window = nullptr;
     Format format = Format::R8G8B8A8_UNORM;
@@ -280,6 +291,30 @@ struct SwapchainInfo {
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t frames_in_flight = 1;
+
+    constexpr SwapchainInfo& setNativeWindow(void* value) {
+        window = value; return *this;
+    }
+
+    constexpr SwapchainInfo& setFormat(Format value) {
+        format = value; return *this;
+    }
+
+    constexpr SwapchainInfo& setPresentMode(PresentMode value) {
+        present = value; return *this;
+    }
+
+    constexpr SwapchainInfo& setWidth(uint32_t value) {
+        width = value; return *this;
+    }
+
+    constexpr SwapchainInfo& setHeight(uint32_t value) {
+        height = value; return *this;
+    }
+
+    constexpr SwapchainInfo& setFramesInFlight(uint32_t value) {
+        frames_in_flight = value; return *this;
+    }
 };
 
 struct TextureInfo {
@@ -289,6 +324,30 @@ struct TextureInfo {
     Dimension3D area = {};
     uint8_t mip_count = 1;
     uint8_t sample_count = 1;
+
+    constexpr TextureInfo& setType(TextureType value) {
+        type = value; return *this;
+    }
+
+    constexpr TextureInfo& setFormat(Format value) {
+        format = value; return *this;
+    }
+
+    constexpr TextureInfo& setUsage(UsageFlags value) {
+        usage = value; return *this;
+    }
+
+    constexpr TextureInfo& setArea(Dimension3D value) {
+        area = value; return *this;
+    }
+
+    constexpr TextureInfo& setMipCount(uint8_t value) {
+        mip_count = value; return *this;
+    }
+
+    constexpr TextureInfo& setSampleCount(uint8_t value) {
+        sample_count = value; return *this;
+    }
 };
 
 struct TextureViewInfo {
@@ -297,6 +356,26 @@ struct TextureViewInfo {
     uint8_t mip_count = 1;
     uint8_t base_layer = 0;
     uint8_t layer_count = 1;
+
+    constexpr TextureViewInfo& setFormat(Format value) {
+        format = value; return *this;
+    }
+
+    constexpr TextureViewInfo& setBaseMip(uint8_t value) {
+        base_mip = value; return *this;
+    }
+
+    constexpr TextureViewInfo& setMipCount(uint8_t value) {
+        mip_count = value; return *this;
+    }
+
+    constexpr TextureViewInfo& setBaseLayer(uint8_t value) {
+        base_layer = value; return *this;
+    }
+
+    constexpr TextureViewInfo& setLayerCount(uint8_t value) {
+        layer_count = value; return *this;
+    }
 };
 
 struct SamplerInfo {
@@ -312,22 +391,71 @@ struct SamplerInfo {
     float max_anisotropy = 1.0f;
     bool enable_compare = false;
     CompareOp compare_op = CompareOp::Always;
+
+    constexpr SamplerInfo& setMinFilter(Filter value) {
+        min = value; return *this;
+    }
+
+    constexpr SamplerInfo& setMagFilter(Filter value) {
+        mag = value; return *this;
+    }
+
+    constexpr SamplerInfo& setMipFilter(Filter value) {
+        mip = value; return *this;
+    }
+
+    constexpr SamplerInfo& setAddressModeU(AddressMode value) {
+        u = value; return *this;
+    }
+
+    constexpr SamplerInfo& setAddressModeV(AddressMode value) {
+        v = value; return *this;
+    }
+
+    constexpr SamplerInfo& setAddressModeW(AddressMode value) {
+        w = value; return *this;
+    }
+
+    constexpr SamplerInfo& setMinLod(float value) {
+        min_lod = value; return *this;
+    }
+
+    constexpr SamplerInfo& setMaxLod(float value) {
+        max_lod = value; return *this;
+    }
+
+    constexpr SamplerInfo& setEnableAnisotropy(bool value) {
+        enable_anisotropy = value; return *this;
+    }
+
+    constexpr SamplerInfo& setMaxAnisotropy(float value) {
+        max_anisotropy = value; return *this;
+    }
+
+    constexpr SamplerInfo& setEnableCompare(bool value) {
+        enable_compare = value; return *this;
+    }
+
+    constexpr SamplerInfo& setCompareOp(CompareOp value) {
+        compare_op = value; return *this;
+    }
 };
 
 struct ShaderInfo {
     std::string_view bytecode;
     std::string_view entry = "main";
     ShaderStageFlags stage = ShaderStageFlags::None;
-};
 
-/// The result of a device memory allocation.
-struct AllocResult {
-    ptr device = null;
-    void* host = nullptr;
+    constexpr ShaderInfo& setBytecode(std::string_view value) {
+        bytecode = value; return *this;
+    }
 
-    /// Returns true if this allocation is valid.
-    bool valid() const {
-        return device != null;
+    constexpr ShaderInfo& setEntry(std::string_view value) {
+        entry = value; return *this;
+    }
+
+    constexpr ShaderInfo& setStage(ShaderStageFlags value) {
+        stage = value; return *this;
     }
 };
 
@@ -345,11 +473,31 @@ struct CopyRegion {
     uint8_t mip_level = 0;
     uint8_t base_layer = 0;
     uint8_t layer_count = 1;
+
+    constexpr CopyRegion& setOffset(Offset3D value) {
+        offset = value; return *this;
+    }
+
+    constexpr CopyRegion& setArea(Dimension3D value) {
+        area = value; return *this;
+    }
+
+    constexpr CopyRegion& setMipLevel(uint8_t value) {
+        mip_level = value; return *this;
+    }
+
+    constexpr CopyRegion& setBaseLayer(uint8_t value) {
+        base_layer = value; return *this;
+    }
+
+    constexpr CopyRegion& setLayerCount(uint8_t value) {
+        layer_count = value; return *this;
+    }
 };
 
 struct AttachmentInfo {
     Format format = Format::Undefined;
-    bool blend_enable = false;
+    bool enable_blend = false;
     BlendOp color_op = BlendOp::Add;
     Factor src_color_factor = Factor::One;
     Factor dst_color_factor = Factor::Zero;
@@ -357,6 +505,42 @@ struct AttachmentInfo {
     Factor src_alpha_factor = Factor::One;
     Factor dst_alpha_factor = Factor::Zero;
     uint32_t color_write_mask = 0xFF;
+
+    constexpr AttachmentInfo& setFormat(Format value) {
+        format = value; return *this;
+    }
+
+    constexpr AttachmentInfo& setEnableBlend(bool value) {
+        enable_blend = value; return *this;
+    }
+
+    constexpr AttachmentInfo& setColorOp(BlendOp value) {
+        color_op = value; return *this;
+    }
+
+    constexpr AttachmentInfo& setSrcColorFactor(Factor value) {
+        src_color_factor = value; return *this;
+    }
+
+    constexpr AttachmentInfo& setDstColorFactor(Factor value) {
+        dst_color_factor = value; return *this;
+    }
+
+    constexpr AttachmentInfo& setAlphaOp(BlendOp value) {
+        alpha_op = value; return *this;
+    }
+
+    constexpr AttachmentInfo& setSrcAlphaFactor(Factor value) {
+        src_alpha_factor = value; return *this;
+    }
+
+    constexpr AttachmentInfo& setDstAlphaFactor(Factor value) {
+        dst_alpha_factor = value; return *this;
+    }
+
+    constexpr AttachmentInfo& setColorWriteMask(uint32_t value) {
+        color_write_mask = value; return *this;
+    }
 };
 
 struct RasterInfo {
@@ -374,7 +558,63 @@ struct RasterInfo {
     float depth_bias_clamp = 0.0f;
     float depth_bias_slope = 0.0f;
     float depth_bias_constant = 0.0f;
-};
+
+    constexpr RasterInfo& setTopology(Topology value) {
+        topology = value; return *this;
+    }
+
+    constexpr RasterInfo& setFill(FillMode value) {
+        fill = value; return *this;
+    }
+
+    constexpr RasterInfo& setCull(CullMode value) {
+        cull = value; return *this;
+    }
+
+    constexpr RasterInfo& setFrontFace(FrontFace value) {
+        face = value; return *this;
+    }
+
+    constexpr RasterInfo& setSampleCount(uint8_t value) {
+        sample_count = value; return *this;
+    }
+
+    constexpr RasterInfo& setAttachments(const std::vector<AttachmentInfo>& value) {
+        attachments = value; return *this;
+    }
+
+    constexpr RasterInfo& setDepthFormat(Format value) {
+        depth = value; return *this;
+    }
+
+    constexpr RasterInfo& setDepthCompare(CompareOp value) {
+        depth_compare = value; return *this;
+    }
+
+    constexpr RasterInfo& setEnableDepthTest(bool value) {
+        depth_test = value; return *this;
+    }
+
+    constexpr RasterInfo& setEnableDepthWrite(bool value) {
+        depth_write = value; return *this;
+    }
+
+    constexpr RasterInfo& setEnableDepthBias(bool value) {
+        depth_bias_enable = value; return *this;
+    }
+
+    constexpr RasterInfo& setDepthBiasClamp(float value) {
+        depth_bias_clamp = value; return *this;
+    }
+
+    constexpr RasterInfo& setDepthBiasSlope(float value) {
+        depth_bias_slope = value; return *this;
+    }
+
+    constexpr RasterInfo& setDepthBiasConstant(float value) {
+        depth_bias_constant = value; return *this;
+    }
+}; 
 
 struct TargetInfo {
     Texture texture = null;
@@ -386,17 +626,61 @@ struct TargetInfo {
         ClearColor clear_color;
         ClearDepth clear_depth;
     };
+
+    constexpr TargetInfo& setTexture(Texture value) {
+        texture = value; return *this;
+    }
+
+    constexpr TargetInfo& setView(TextureViewInfo value) {
+        view = value; return *this;
+    }
+
+    constexpr TargetInfo& setLoadOp(LoadOp value) {
+        load = value; return *this;
+    }
+
+    constexpr TargetInfo& setStoreOp(StoreOp value) {
+        store = value; return *this;
+    }
+
+    constexpr TargetInfo& setClearColor(ClearColor value) {
+        clear_color = value; return *this;
+    }
+
+    constexpr TargetInfo& setClearDepth(ClearDepth value) {
+        clear_depth = value; return *this;
+    }
 };
 
 struct RenderInfo {
     Scissor area = {};
     std::vector<TargetInfo> targets = {};
     std::optional<TargetInfo> depth = {};
+
+    constexpr RenderInfo& setArea(Scissor value) {
+        area = value; return *this;
+    }
+
+    constexpr RenderInfo& setTargets(const std::vector<TargetInfo>& value) {
+        targets = value; return *this;
+    }
+
+    constexpr RenderInfo& setDepthTarget(const TargetInfo& value) {
+        depth = value; return *this;
+    }
 };
 
 struct DeviceInfo {
     Backend backend = {};
     bool validation = false;
+
+    constexpr DeviceInfo& setBackend(Backend value) {
+        backend = value; return *this;
+    }
+
+    constexpr DeviceInfo& setEnableValidation(bool value) {
+        validation = value; return *this;
+    }
 };
 
 struct DeviceProperties {
