@@ -2017,6 +2017,7 @@ void VulkanDevice::drawIndexedInstanced(
         ptr fragment, 
         ptr index, 
         uint32_t indices, 
+        uint32_t offset,
         uint32_t instances) {
     VulkanCommandList& cmd = commands.get(CL);
  
@@ -2035,7 +2036,7 @@ void VulkanDevice::drawIndexedInstanced(
         &fragment);
 
     cmd.buffer.bindIndexBuffer(allocs[index].buffer, 0, vk::IndexType::eUint32);
-    cmd.buffer.drawIndexed(indices, instances, 0, 0, 0);
+    cmd.buffer.drawIndexed(indices, instances, offset, 0, 0);
 }
 
 void VulkanDevice::dispatch(

@@ -247,6 +247,7 @@ struct VulkanDevice : public Device {
         ptr fragment, 
         ptr index,
         uint32_t indices, 
+        uint32_t offset,
         uint32_t instances) override;
     void dispatch(
         CommandList, 

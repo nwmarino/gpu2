@@ -487,7 +487,8 @@ public:
         ptr vertex, 
         ptr fragment, 
         ptr index,
-        uint32_t indices, 
+        uint32_t indices,
+        uint32_t offset,
         uint32_t instances) = 0;
     virtual void dispatch(
         CommandList, 
