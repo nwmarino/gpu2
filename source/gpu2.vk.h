@@ -170,11 +170,11 @@ struct VulkanDevice : public Device {
     void createDescriptorSetup();
     void createPipelineLayout();
 
+    void determineProperties();
+
     void cleanupCommands(QueueType);
 
     void destroy() override;
-
-    Capabilities getCapabilities() override;
 
     void waitIdle() override;
     void waitIdle(QueueType) override;

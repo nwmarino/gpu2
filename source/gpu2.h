@@ -394,18 +394,19 @@ struct RenderInfo {
     std::optional<TargetInfo> depth = {};
 };
 
-struct Capabilities {
-
-};
-
 struct DeviceInfo {
     Backend backend = {};
     bool validation = false;
 };
 
+struct DeviceProperties {
+    
+};
+
 class Device {
 protected:
-    const DeviceInfo info = {};
+    DeviceInfo info = {};
+    DeviceProperties props = {};
 
     explicit Device(const DeviceInfo& info) : info(info) {}
 
@@ -413,9 +414,10 @@ public:
     /// Returns the information used to create this device.
     const DeviceInfo& getInfo() const { return info; }
 
-    virtual void destroy() = 0;
+    /// Returns the properties of the underlying graphics device.
+    const DeviceProperties& getProperties() const { return props; };
 
-    virtual Capabilities getCapabilities() = 0;
+    virtual void destroy() = 0;
 
     virtual void waitIdle() = 0;
     virtual void waitIdle(QueueType) = 0;

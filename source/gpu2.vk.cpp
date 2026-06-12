@@ -784,6 +784,10 @@ void VulkanDevice::createPipelineLayout() {
         &pipeline_layout));
 }
 
+void VulkanDevice::determineProperties() {
+    
+}
+
 void VulkanDevice::cleanupCommands(QueueType type) {
     VulkanQueue& queue = queues[static_cast<uint32_t>(type)];
 
@@ -879,10 +883,6 @@ void VulkanDevice::destroy() {
         instance.destroy();
         instance = nullptr;
     }
-}
-
-Capabilities VulkanDevice::getCapabilities() {
-    return Capabilities {};
 }
 
 void VulkanDevice::waitIdle() {
