@@ -179,7 +179,7 @@ struct VulkanDevice : public Device {
     void waitIdle() override;
     void waitIdle(QueueType) override;
 
-    AllocResult malloc(uint32_t size, MemoryType type) override;
+    gpu::ptr malloc(uint32_t size, MemoryType type, void** mapped) override;
     void free(ptr) override;
     void* deviceToHostPointer(ptr) override;
 

@@ -893,7 +893,7 @@ void VulkanDevice::waitIdle(QueueType type) {
     VK_CHECK(queues[static_cast<uint32_t>(type)].handle.waitIdle());
 }
 
-AllocResult VulkanDevice::malloc(uint32_t size, MemoryType type) {
+gpu::ptr VulkanDevice::malloc(uint32_t size, MemoryType type, void** mapped) {
     std::lock_guard<std::mutex> lock(memory_mutex);
 
     VulkanAlloc alloc = {};
@@ -954,7 +954,7 @@ AllocResult VulkanDevice::malloc(uint32_t size, MemoryType type) {
         &alloc_info));
 
     if (result != vk::Result::eSuccess)
-        return AllocResult {};
+        return null;
     
     auto addr_info = vk::BufferDeviceAddressInfo {}
         .setBuffer(alloc.buffer);
@@ -963,7 +963,7 @@ AllocResult VulkanDevice::malloc(uint32_t size, MemoryType type) {
     alloc.device = static_cast<ptr>(device.getBufferAddress(&addr_info));
     if (!alloc.device) {
         vmaDestroyBuffer(allocator, alloc.buffer, alloc.alloc);
-        return AllocResult {};
+        return null;
     }
 
     // If the memory is not device only, then register the host address.
@@ -975,10 +975,10 @@ AllocResult VulkanDevice::malloc(uint32_t size, MemoryType type) {
 
     allocs.emplace(alloc.device, alloc);
 
-    return AllocResult {
-        .device = alloc.device,
-        .host = alloc.host,
-    };
+    if (mapped)
+        *mapped = alloc.host;
+
+    return alloc.device;
 }
 
 void VulkanDevice::free(ptr device) {
@@ -1024,10 +1024,8 @@ Texture VulkanDevice::createTexture(const TextureInfo& info) {
         .setArrayLayers(1) /* @Todo: Make this not hard? */
         .setSamples(convertSampleCount(info.sample_count))
         .setUsage(convert(info.usage))
-        .setInitialLayout(vk::ImageLayout::eGeneral)
-        .setSharingMode(vk::SharingMode::eConcurrent)
-        .setQueueFamilyIndexCount(queue_families.size())
-        .setPQueueFamilyIndices(queue_families.data());
+        .setInitialLayout(vk::ImageLayout::eUndefined)
+        .setSharingMode(vk::SharingMode::eExclusive);
 
     VmaAllocationCreateInfo vma_info = {};
     vma_info.requiredFlags = VMA_MEMORY_USAGE_GPU_ONLY;

@@ -274,9 +274,10 @@ struct Dimension3D {
 };
 
 /// The result of a device memory allocation.
-struct AllocResult {
+template<typename T = void>
+struct Alloc {
     ptr device = null;
-    void* host = nullptr;
+    T* host = nullptr;
 
     /// Returns true if this allocation is valid.
     bool valid() const {
@@ -706,7 +707,16 @@ public:
     virtual void waitIdle() = 0;
     virtual void waitIdle(QueueType) = 0;
 
-    virtual AllocResult malloc(uint32_t size, MemoryType type) = 0;
+    template<typename T>
+    Alloc<T> malloc(uint32_t elements = 1, MemoryType type = MemoryType::Upload) {
+        Alloc<T> result = {};
+        result.device = malloc(sizeof(T) * elements, 
+                               type, 
+                               reinterpret_cast<void**>(&result.host));
+        return result;
+    }
+
+    virtual gpu::ptr malloc(uint32_t size, MemoryType type, void** mapped = nullptr) = 0;
     virtual void free(ptr) = 0;
     virtual void* deviceToHostPointer(ptr) = 0;
 
