@@ -149,6 +149,8 @@ vk::Format gpu::convert(Format format) {
             return vk::Format::eR16Uint;
         case Format::R32_UINT:
             return vk::Format::eR32Uint;
+        case Format::R32_SFLOAT:
+            return vk::Format::eR32Sfloat;
         case Format::D32_FLOAT:
             return vk::Format::eD32Sfloat;
         case Format::D24_UNORM_S8_UINT:
@@ -448,6 +450,7 @@ vk::ImageAspectFlags gpu::convertAspectMask(Format format) {
         case Format::R8_UNORM:
         case Format::R16_UINT:
         case Format::R32_UINT:
+        case Format::R32_SFLOAT:
             return vk::ImageAspectFlagBits::eColor;
         case Format::D32_FLOAT:
         case Format::D24_UNORM_S8_UINT:

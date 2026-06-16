@@ -93,6 +93,7 @@ enum class Format {
     R8_UNORM,
     R16_UINT,
     R32_UINT,
+    R32_SFLOAT,
     D32_FLOAT,
     D24_UNORM_S8_UINT,
 };
