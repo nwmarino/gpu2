@@ -1,5 +1,7 @@
 //
-//  Copyright (c) 2026 Nick Marino
+//  compute.cpp
+//
+//  Copyright (c) 2026 Nick Marino.
 //  All rights reserved.
 //
 
@@ -15,11 +17,11 @@ int main() {
 
     gpu::Device* device = gpu::createDevice(device_info);
 
-    gpu::AllocResult data = device->malloc(128 * sizeof(float), gpu::MemoryType::Upload);
+    gpu::Alloc<float> data = device->malloc<float>(128);
 
     // Set the entire buffer to 0.0, should be 42.0 after dispatch.
     for (uint32_t i = 0; i < 128u; ++i) {
-        reinterpret_cast<float*>(data.host)[i] = 0.0f;
+        data.host[i] = 0.f;
     }
 
     gpu::Shader shader = device->createShader(gpu::ShaderInfo {

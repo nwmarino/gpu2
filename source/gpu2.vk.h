@@ -1,5 +1,7 @@
 //
-//  Copyright (c) 2026 Nick Marino
+//  gpu2.vk.h
+//
+//  Copyright (c) 2026 Nick Marino.
 //  All rights reserved.
 //
 
@@ -206,7 +208,7 @@ struct VulkanDevice : public Device {
     Swapchain createSwapchain(const SwapchainInfo&) override;
     void freeSwapchain(Swapchain) override;
     void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) override;
-    Texture acquireSwapchainTexture(Swapchain) override;
+    Texture acquireSwapchainTexture(Swapchain, CommandList) override;
     void present(Swapchain, CommandList, Semaphore, uint64_t value) override;
 
     Descriptor getSamplerDescriptor(Sampler) override;
@@ -226,7 +228,6 @@ struct VulkanDevice : public Device {
     void copy(CommandList, ptr src, ptr dst, uint64_t size) override;
 
     void barrier(CommandList, StageFlags before, StageFlags after) override;
-    void barrier(CommandList, Texture, TextureLayout before, TextureLayout after) override;
 
     void beginRendering(CommandList, const RenderInfo&) override;
     void endRendering(CommandList) override;
@@ -259,7 +260,6 @@ struct VulkanDevice : public Device {
 
 vk::PipelineBindPoint convert(PipelineType type);
 vk::ImageType convert(TextureType type);
-vk::ImageLayout convert(TextureLayout layout);
 vk::PresentModeKHR convert(PresentMode mode);
 vk::Format convert(Format format);
 vk::Filter convert(Filter filter);

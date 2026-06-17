@@ -1,5 +1,7 @@
 //
-//  Copyright (c) 2026 Nick Marino
+//  gpu2.vk.cpp
+//
+//  Copyright (c) 2026 Nick Marino.
 //  All rights reserved.
 //
 
@@ -90,27 +92,6 @@ vk::ImageType gpu::convert(TextureType type) {
             return vk::ImageType::e2D;
         case TextureType::D3:
             return vk::ImageType::e3D;
-    }
-}
-
-vk::ImageLayout gpu::convert(TextureLayout layout) {
-    switch (layout) {
-        case TextureLayout::Undefined:
-            return vk::ImageLayout::eUndefined;
-        case TextureLayout::General:
-            return vk::ImageLayout::eGeneral;
-        case TextureLayout::ShaderRead:
-            return vk::ImageLayout::eShaderReadOnlyOptimal;
-        case TextureLayout::ColorTarget:
-            return vk::ImageLayout::eColorAttachmentOptimal;
-        case TextureLayout::DepthStencilTarget:
-            return vk::ImageLayout::eDepthStencilAttachmentOptimal;
-        case TextureLayout::TransferSrc:
-            return vk::ImageLayout::eTransferSrcOptimal;
-        case TextureLayout::TransferDst:
-            return vk::ImageLayout::eTransferDstOptimal;
-        case TextureLayout::Present:
-            return vk::ImageLayout::ePresentSrcKHR;
     }
 }
 
@@ -1552,8 +1533,9 @@ void VulkanDevice::resizeSwapchain(Swapchain SW, uint32_t width, uint32_t height
     }
 }
 
-Texture VulkanDevice::acquireSwapchainTexture(Swapchain S) {
+Texture VulkanDevice::acquireSwapchainTexture(Swapchain S, CommandList C) {
     VulkanSwapchain& swapchain = swapchains.get(S);
+    VulkanCommandList& vk_cmd = commands.get(C);
     vk::Semaphore sema = swapchain.image_available_semas[swapchain.frame_index];
 
     vk::Result result = device.acquireNextImageKHR(
@@ -1563,9 +1545,35 @@ Texture VulkanDevice::acquireSwapchainTexture(Swapchain S) {
         nullptr, 
         &swapchain.image_index);
 
-    return result == vk::Result::eSuccess 
-        ? swapchain.textures[swapchain.image_index]
-        : null;
+    if (result != vk::Result::eSuccess)
+        return null;
+
+    // Transition the swapchain image to the General layout.
+    VulkanTexture& texture = 
+        textures.get(swapchain.textures[swapchain.image_index]);
+
+    auto range = vk::ImageSubresourceRange {}
+        .setAspectMask(convertAspectMask(swapchain.info.format))
+        .setBaseArrayLayer(0)
+        .setLayerCount(1)
+        .setBaseMipLevel(0)
+        .setLevelCount(1);
+
+    auto barrier = vk::ImageMemoryBarrier2 {}
+        .setImage(texture.image)
+        .setOldLayout(vk::ImageLayout::eUndefined)
+        .setNewLayout(vk::ImageLayout::eGeneral)
+        .setSubresourceRange(range)
+        .setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands)
+        .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite)
+        .setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands)
+        .setDstAccessMask(vk::AccessFlagBits2::eMemoryWrite 
+                        | vk::AccessFlagBits2::eMemoryRead);
+
+    vk_cmd.buffer.pipelineBarrier2(vk::DependencyInfo {}
+        .setImageMemoryBarriers(barrier));
+
+    return swapchain.textures[swapchain.image_index];
 }
 
 void VulkanDevice::present(Swapchain swapchain, CommandList cmd, Semaphore sema, uint64_t value) {
@@ -1576,6 +1584,34 @@ void VulkanDevice::present(Swapchain swapchain, CommandList cmd, Semaphore sema,
     VulkanQueue& queue = queues[static_cast<uint32_t>(QueueType::Graphics)];
 
     VulkanCommandList vk_cmd = commands.remove(cmd);
+
+    {
+        // Transition the current swapchain image to the PresentSrc layout.
+        VulkanTexture& vk_texture = textures.get(
+            vk_swapchain.textures[vk_swapchain.image_index]);
+
+        auto range = vk::ImageSubresourceRange {}
+            .setAspectMask(convertAspectMask(vk_swapchain.info.format))
+            .setBaseArrayLayer(0)
+            .setLayerCount(1)
+            .setBaseMipLevel(0)
+            .setLevelCount(1);
+
+        auto barrier = vk::ImageMemoryBarrier2 {}
+            .setImage(vk_texture.image)
+            .setOldLayout(vk::ImageLayout::eGeneral)
+            .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
+            .setSubresourceRange(range)
+            .setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands)
+            .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite)
+            .setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands)
+            .setDstAccessMask(vk::AccessFlagBits2::eMemoryWrite 
+                            | vk::AccessFlagBits2::eMemoryRead);
+
+        vk_cmd.buffer.pipelineBarrier2(vk::DependencyInfo {}
+            .setImageMemoryBarriers(barrier));
+    }
+
     VK_CHECK(vk_cmd.buffer.end());
     queue.pending.push_back(vk_cmd);
 
@@ -1846,36 +1882,6 @@ void VulkanDevice::barrier(
         .setMemoryBarriers(barrier));
 }
 
-void VulkanDevice::barrier(
-        CommandList CL, 
-        Texture T, 
-        TextureLayout before, 
-        TextureLayout after) {
-    VulkanCommandList& cmd = commands.get(CL);
-    VulkanTexture& texture = textures.get(T);
-
-    auto range = vk::ImageSubresourceRange {}
-        .setAspectMask(convertAspectMask(texture.info.format))
-        .setBaseArrayLayer(0)
-        .setLayerCount(1)
-        .setBaseMipLevel(0)
-        .setLevelCount(texture.info.mip_count);
-
-    auto barrier = vk::ImageMemoryBarrier2 {}
-        .setImage(texture.image)
-        .setOldLayout(convert(before))
-        .setNewLayout(convert(after))
-        .setSubresourceRange(range)
-        .setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands)
-        .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite)
-        .setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands)
-        .setDstAccessMask(vk::AccessFlagBits2::eMemoryWrite 
-                        | vk::AccessFlagBits2::eMemoryRead);
-
-    cmd.buffer.pipelineBarrier2(vk::DependencyInfo {}
-        .setImageMemoryBarriers(barrier));
-}
-
 void VulkanDevice::beginRendering(CommandList CL, const RenderInfo& info) {
     VulkanCommandList& cmd = commands.get(CL);
 
@@ -1923,7 +1929,7 @@ void VulkanDevice::beginRendering(CommandList CL, const RenderInfo& info) {
 
         return vk::RenderingAttachmentInfo {}
             .setImageView(view)
-            .setImageLayout(ds ? vk::ImageLayout::eDepthStencilAttachmentOptimal : vk::ImageLayout::eColorAttachmentOptimal)
+            .setImageLayout(vk::ImageLayout::eGeneral)
             .setLoadOp(convert(target.load))
             .setStoreOp(convert(target.store))
             .setClearValue(cv);

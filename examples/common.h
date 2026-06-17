@@ -1,10 +1,12 @@
 //
-//  Copyright (c) 2026 Nick Marino
+//  common.h
+//
+//  Copyright (c) 2026 Nick Marino.
 //  All rights reserved.
 //
 
-#ifndef IGPU_EXAMPLES_COMMON_H_
-#define IGPU_EXAMPLES_COMMON_H_
+#ifndef GPU2_EXAMPLES_COMMON_H_
+#define GPU2_EXAMPLES_COMMON_H_
 
 #include <string>
 #include <fstream>
@@ -20,4 +22,4 @@ static inline std::string readFile(const std::string& path) {
     return contents;
 }
 
-#endif // IGPU_EXAMPLES_COMMON_H_
+#endif // GPU2_EXAMPLES_COMMON_H_

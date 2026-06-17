@@ -1,5 +1,7 @@
 //
-//  Copyright (c) 2026 Nick Marino
+//  gpu2.h
+//
+//  Copyright (c) 2026 Nick Marino.
 //  All rights reserved.
 //
 
@@ -188,17 +190,6 @@ enum class TextureType {
 enum class PipelineType {
     Graphics,
     Compute,
-};
-
-enum class TextureLayout {
-    Undefined,
-    General,
-    ShaderRead,
-    ColorTarget,
-    DepthStencilTarget,
-    TransferSrc,
-    TransferDst,
-    Present,
 };
 
 enum class StageFlags : uint32_t {
@@ -744,7 +735,7 @@ public:
     virtual Swapchain createSwapchain(const SwapchainInfo&) = 0;
     virtual void freeSwapchain(Swapchain) = 0;
     virtual void resizeSwapchain(Swapchain, uint32_t width, uint32_t height) = 0;
-    virtual Texture acquireSwapchainTexture(Swapchain) = 0;
+    virtual Texture acquireSwapchainTexture(Swapchain, CommandList) = 0;
     virtual void present(Swapchain, CommandList, Semaphore, uint64_t value) = 0;
 
     virtual Descriptor getSamplerDescriptor(Sampler) = 0;
@@ -764,7 +755,6 @@ public:
     virtual void copy(CommandList, ptr src, ptr dst, uint64_t size) = 0;
 
     virtual void barrier(CommandList, StageFlags before, StageFlags after) = 0;
-    virtual void barrier(CommandList, Texture, TextureLayout before, TextureLayout after) = 0;
 
     virtual void beginRendering(CommandList, const RenderInfo&) = 0;
     virtual void endRendering(CommandList) = 0;

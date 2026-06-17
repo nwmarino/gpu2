@@ -1,5 +1,7 @@
 //
-//  Copyright (c) 2026 Nick Marino
+//  triangle.cpp
+//
+//  Copyright (c) 2026 Nick Marino.
 //  All rights reserved.
 //
 
@@ -58,18 +60,13 @@ int main() {
         fragment, 
         raster_info);
 
-    gpu::AllocResult vertices = device->malloc(6 * sizeof(float), gpu::MemoryType::Upload);
-
-    {
-        // Setup vertex data.
-        float* p = reinterpret_cast<float*>(vertices.host);
-        p[0] = -0.5f;
-        p[1] =  0.5f;
-        p[2] =  0.5f;
-        p[3] =  0.5f;
-        p[4] =  0.0f;
-        p[5] = -0.5f;
-    }
+    gpu::Alloc<float> vertices = device->malloc<float>(6);
+    vertices.host[0] = -0.5f;
+    vertices.host[1] =  0.5f;
+    vertices.host[2] =  0.5f;
+    vertices.host[3] =  0.5f;
+    vertices.host[4] =  0.0f;
+    vertices.host[5] = -0.5f;
 
     gpu::Viewport viewport = {};
     viewport.width = 800;
@@ -90,9 +87,7 @@ int main() {
 
         gpu::CommandList cmd = device->beginRecording(gpu::QueueType::Graphics);
 
-        gpu::Texture texture = device->acquireSwapchainTexture(swapchain);
-
-        device->barrier(cmd, texture, gpu::TextureLayout::Undefined, gpu::TextureLayout::ColorTarget);
+        gpu::Texture texture = device->acquireSwapchainTexture(swapchain, cmd);
 
         gpu::TextureViewInfo view = {};
         view.format = gpu::Format::R8G8B8A8_UNORM;
@@ -122,8 +117,6 @@ int main() {
         device->drawInstanced(cmd, vertices.device, 0, 3, 1);
 
         device->endRendering(cmd);
-
-        device->barrier(cmd, texture, gpu::TextureLayout::ColorTarget, gpu::TextureLayout::Present);
 
         device->present(swapchain, cmd, sema, next_frame++);
     }
