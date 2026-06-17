@@ -623,6 +623,7 @@ void VulkanDevice::createLogicalDevice() {
         .setDescriptorBindingSampledImageUpdateAfterBind(vk::True)
         .setDescriptorBindingVariableDescriptorCount(vk::True)
         .setRuntimeDescriptorArray(vk::True)
+        .setScalarBlockLayout(vk::True)
         .setTimelineSemaphore(vk::True)
         .setPNext(&feats11);
 
